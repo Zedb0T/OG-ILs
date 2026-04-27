@@ -212,6 +212,8 @@ std::unordered_map<std::string, std::vector<std::pair<std::string, float>>>
     external_race_time_cache = {};
 std::unordered_map<std::string, std::vector<std::pair<std::string, float>>>
     external_highscores_cache = {};
+std::unordered_map<std::string, std::vector<std::pair<std::string, float>>>
+    external_il_time_cache = {};
 
 // clang-format off
 // TODO - eventually don't depend on SRC
@@ -239,6 +241,110 @@ const std::unordered_map<std::string, std::string> external_highscores_lookup_ur
     {"jetboard", "https://api.jakspeedruns.workers.dev/v1/highscores/6"},
     {"onin", "https://api.jakspeedruns.workers.dev/v1/highscores/7"},
     {"mash", "https://api.jakspeedruns.workers.dev/v1/highscores/8"}};
+// Individual Level (mission) leaderboards from speedrun.com's "Jak II OG Missions"
+// game (https://www.speedrun.com/jak2og_missions). Each level uses the per-level
+// "Any%" category. Keys mirror the speedrun-category enum names from
+// goal_src/jak2/pc/features/speedruns-h.gc and are looked up by the GOAL side
+// using *il-speedrun-com-keys*.
+const std::unordered_map<std::string, std::string> external_il_lookup_urls = {
+    // Act 1 ILs
+    {"fortress-escape",                    "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/9gy2rk29/w2079g5k?embed=players&max=200"},
+    {"city-help-kid",                      "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/9x1nkm7d/w2079g5k?embed=players&max=200"},
+    {"ruins-tower",                        "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/95k6yv49/w2079g5k?embed=players&max=200"},
+    {"atoll-water",                        "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/dqzjg6gd/w2079g5k?embed=players&max=200"},
+    {"fortress-dump",                      "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/d7yvl6ed/w2079g5k?embed=players&max=200"},
+    {"city-krew-delivery",                 "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wj753o1w/w2079g5k?embed=players&max=200"},
+    {"city-red-gun-training",              "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wo70lg39/w2079g5k?embed=players&max=200"},
+    {"atoll-sig",                          "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/d1j76vyd/w2079g5k?embed=players&max=200"},
+    {"sewer-enemy",                        "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wp7jek4w/w2079g5k?embed=players&max=200"},
+    {"strip-rescue",                       "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/9m5jyk0d/w2079g5k?embed=players&max=200"},
+    {"atoll-battle",                       "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wkkj8gxw/w2079g5k?embed=players&max=200"},
+    {"mountain-lens",                      "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/920z3v6d/w2079g5k?embed=players&max=200"},
+    {"mountain-gear",                      "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/9vm3j1x9/w2079g5k?embed=players&max=200"},
+    {"mountain-shard",                     "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/d40jnv89/w2079g5k?embed=players&max=200"},
+    {"mountain-collection",                "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/9m5jyzxd/w2079g5k?embed=players&max=200"},
+    {"city-keira-delivery",                "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/d0kglvj9/w2079g5k?embed=players&max=200"},
+    {"stadium-board1",                     "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/w6q4rk6d/w2079g5k?embed=players&max=200"},
+    {"city-krew-collection",               "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/93q782rw/w2079g5k?embed=players&max=200"},
+    {"city-yellow-gun-training",           "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/98r6e21d/w2079g5k?embed=players&max=200"},
+    {"drill-eggs",                         "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/dno0rk6w/w2079g5k?embed=players&max=200"},
+    {"city-power",                         "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/dy1yj47d/w2079g5k?embed=players&max=200"},
+    {"palace-cable",                       "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/drpegpkw/w2079g5k?embed=players&max=200"},
+    {"palace-boss",                        "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wlglngg9/w2079g5k?embed=players&max=200"},
+    {"city-shuttle",                       "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/we21n24w/w2079g5k?embed=players&max=200"},
+    {"ruins-enemy",                        "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/9zp3xp4w/w2079g5k?embed=players&max=200"},
+    // Act 2 ILs
+    {"forest-scouts",                      "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/9gy2ry29/w2079g5k?embed=players&max=200"},
+    {"city-escort-kid",                    "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/9x1nk17d/w2079g5k?embed=players&max=200"},
+    {"dig-knock-down",                     "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/95k6yk49/w2079g5k?embed=players&max=200"},
+    {"strip-grenade",                      "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/dqzjgzgd/w2079g5k?embed=players&max=200"},
+    {"drill-ship",                         "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/d7yvlyed/w2079g5k?embed=players&max=200"},
+    {"city-port-run",                      "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wj75371w/w2079g5k?embed=players&max=200"},
+    {"city-meet-brutter",                  "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wo70l739/w2079g5k?embed=players&max=200"},
+    {"sewer-board",                        "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/d1j76jyd/w2079g5k?embed=players&max=200"},
+    {"forest-hunt",                        "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wp7je74w/w2079g5k?embed=players&max=200"},
+    {"city-intercept-tanker",              "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/9m5jy50d/w2079g5k?embed=players&max=200"},
+    {"stadium-race-class3",                "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wkkj8kxw/w2079g5k?embed=players&max=200"},
+    {"city-protect-water-slums",           "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/920z306d/w2079g5k?embed=players&max=200"},
+    {"dig-find-totem",                     "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/9vm3jmx9/w2079g5k?embed=players&max=200"},
+    {"city-destroy-guard-vehicles",        "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/d40jn089/w2079g5k?embed=players&max=200"},
+    {"city-play-onin-game",                "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/d0kglkj9/w2079g5k?embed=players&max=200"},
+    {"canyon-insert-items",                "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/w6q4rq6d/w2079g5k?embed=players&max=200"},
+    {"tomb-poles",                         "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/93q78qrw/w2079g5k?embed=players&max=200"},
+    {"tomb-water",                         "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/98r6er1d/w2079g5k?embed=players&max=200"},
+    {"tomb-boss",                          "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/dno0ro6w/w2079g5k?embed=players&max=200"},
+    // Act 3 ILs
+    {"fortress-save-friends",              "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/dy1yj17d/w2079g5k?embed=players&max=200"},
+    {"sewer-escort",                       "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/drpegjkw/w2079g5k?embed=players&max=200"},
+    {"stadium-race-class2",                "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wlgln6g9/w2079g5k?embed=players&max=200"},
+    {"city-stop-bomb-bots",                "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/we21n44w/w2079g5k?embed=players&max=200"},
+    {"city-errol-challenge",               "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/9zp3xr4w/w2079g5k?embed=players&max=200"},
+    {"strip-drop",                         "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/9gy2rz29/w2079g5k?embed=players&max=200"},
+    {"ruins-mech",                         "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/9x1nk27d/w2079g5k?embed=players&max=200"},
+    {"forest-protect",                     "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/95k6yj49/w2079g5k?embed=players&max=200"},
+    {"drill-mech",                         "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/dqzjg0gd/w2079g5k?embed=players&max=200"},
+    {"city-save-lurkers",                  "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/d7yvl7ed/w2079g5k?embed=players&max=200"},
+    {"stadium-race-class",                 "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wj753y1w/w2079g5k?embed=players&max=200"},
+    {"palace-sneak-in",                    "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wo70lk39/w2079g5k?embed=players&max=200"},
+    {"castle-break-in",                    "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/d1j760yd/w2079g5k?embed=players&max=200"},
+    {"castle-boss",                        "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wp7jep4w/w2079g5k?embed=players&max=200"},
+    {"city-whack",                         "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/9m5jye0d/w2079g5k?embed=players&max=200"},
+    {"under-mech",                         "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wkkj82xw/w2079g5k?embed=players&max=200"},
+    {"under-sig",                          "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/920z3j6d/w2079g5k?embed=players&max=200"},
+    {"city-defend-stadium",                "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/9vm3jyx9/w2079g5k?embed=players&max=200"},
+    {"consite-find-baron",                 "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/d40jn689/w2079g5k?embed=players&max=200"},
+    {"nest-get-to-gun",                    "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/d0kgl0j9/w2079g5k?embed=players&max=200"},
+    {"nest-enter",                         "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/w6q4rv6d/w2079g5k?embed=players&max=200"},
+    {"nest-boss",                          "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/93q780rw/w2079g5k?embed=players&max=200"},
+    // Side missions
+    {"city-burning-bush-get-to-1",         "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/95k6yl29/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-get-to-2",         "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/dqzjg5md/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-get-to-3",         "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/d7yvlz5d/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-get-to-4",         "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wj7531rw/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-get-to-5",         "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wo70lqv9/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-get-to-6",         "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wp7je0lw/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-get-to-7",         "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/9m5jy1ld/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-get-to-8",         "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wkkj815w/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-get-to-9",         "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/920z3ngd/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-get-to-10",        "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/9vm3jz19/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-get-to-11",        "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/d40jnk09/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-get-to-12",        "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/d0kgl409/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-get-to-13",        "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/w6q4rmnd/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-get-to-14",        "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/93q78m7w/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-get-to-15",        "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/98r6em7d/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-collection-1",     "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/dno0rqnw/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-collection-2",     "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/dy1yj3jd/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-collection-3",     "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/drpegy8w/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-bombbot-1",        "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wlgln2p9/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-racepoint-1",      "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/we21nqqw/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-shuttle-1",        "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/9zp3x86w/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-ring-1",           "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/9gy2r7q9/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-ring-2",           "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/9x1nkx6d/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-ring-3",           "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/95k6ym29/w2079g5k?embed=players&max=200"},
+    {"city-burning-bush-race-port",        "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/dqzjgnmd/w2079g5k?embed=players&max=200"},
+    {"stadium-burning-bush-race-class3-r", "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/d7yvl25d/w2079g5k?embed=players&max=200"},
+    {"stadium-burning-bush-race-class2-r", "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wj753vrw/w2079g5k?embed=players&max=200"},
+    {"stadium-burning-bush-race-class1-r", "https://www.speedrun.com/api/v1/leaderboards/3dxyee56/level/wo70l3v9/w2079g5k?embed=players&max=200"}};
 // clang-format on
 
 void callback_fetch_external_speedrun_times(bool success,
@@ -386,6 +492,58 @@ void callback_fetch_external_highscores(bool success,
   intern_from_c("*pc-waiting-on-rpc?*")->value() = bool_to_symbol(false);
 }
 
+// TODO - duplicate code, put it in a function
+void callback_fetch_external_il_times(bool success,
+                                      const std::string& cache_id,
+                                      std::optional<std::string> result) {
+  std::scoped_lock lock{background_task_lock};
+
+  if (!success) {
+    intern_from_c("*pc-rpc-error?*")->value() = bool_to_symbol(true);
+    if (result) {
+      last_rpc_error = result.value();
+    } else {
+      last_rpc_error = "Unexpected Error Occurred";
+    }
+    intern_from_c("*pc-waiting-on-rpc?*")->value() = bool_to_symbol(false);
+    return;
+  }
+
+  if (!result) {
+    intern_from_c("*pc-waiting-on-rpc?*")->value() = bool_to_symbol(false);
+    return;
+  }
+
+  const auto data = safe_parse_json(result.value());
+  if (!data || !data->contains("data") || !data->at("data").contains("players") ||
+      !data->at("data").at("players").contains("data") || !data->at("data").contains("runs")) {
+    intern_from_c("*pc-waiting-on-rpc?*")->value() = bool_to_symbol(false);
+    return;
+  }
+
+  auto& players = data->at("data").at("players").at("data");
+  auto& runs = data->at("data").at("runs");
+  std::vector<std::pair<std::string, float>> times = {};
+  for (const auto& run_info : runs) {
+    std::pair<std::string, float> time_info;
+    if (players.size() > times.size() && players.at(times.size()).contains("names") &&
+        players.at(times.size()).at("names").contains("international")) {
+      time_info.first = players.at(times.size()).at("names").at("international");
+    } else if (players.size() > times.size() && players.at(times.size()).contains("name")) {
+      time_info.first = players.at(times.size()).at("name");
+    } else {
+      time_info.first = "Unknown";
+    }
+    if (run_info.contains("run") && run_info.at("run").contains("times") &&
+        run_info.at("run").at("times").contains("primary_t")) {
+      time_info.second = run_info.at("run").at("times").at("primary_t");
+      times.push_back(time_info);
+    }
+  }
+  external_il_time_cache[cache_id] = times;
+  intern_from_c("*pc-waiting-on-rpc?*")->value() = bool_to_symbol(false);
+}
+
 void pc_fetch_external_speedrun_times(u32 speedrun_id_ptr) {
   std::scoped_lock lock{background_task_lock};
   auto speedrun_id = std::string(Ptr<String>(speedrun_id_ptr).c()->data());
@@ -424,6 +582,25 @@ void pc_fetch_external_race_times(u32 race_id_ptr) {
     req.callback = callback_fetch_external_race_times;
     req.url = external_race_lookup_urls.at(race_id);
     req.cache_id = race_id;
+    g_background_worker.enqueue_webrequest(req);
+  }
+}
+
+void pc_fetch_external_il_times(u32 il_id_ptr) {
+  std::scoped_lock lock{background_task_lock};
+  auto il_id = std::string(Ptr<String>(il_id_ptr).c()->data());
+  if (external_il_lookup_urls.find(il_id) == external_il_lookup_urls.end()) {
+    lg::error("No URL for il_id: '{}'", il_id);
+    return;
+  }
+
+  if (external_il_time_cache.find(il_id) == external_il_time_cache.end()) {
+    intern_from_c("*pc-waiting-on-rpc?*")->value() = bool_to_symbol(true);
+    intern_from_c("*pc-rpc-error?*")->value() = bool_to_symbol(false);
+    WebRequestJobPayload req;
+    req.callback = callback_fetch_external_il_times;
+    req.url = external_il_lookup_urls.at(il_id);
+    req.cache_id = il_id;
     g_background_worker.enqueue_webrequest(req);
   }
 }
@@ -490,6 +667,25 @@ void pc_get_external_race_time(u32 race_id_ptr, s32 index, u32 name_dest_ptr, u3
   }
 }
 
+void pc_get_external_il_time(u32 il_id_ptr, s32 index, u32 name_dest_ptr, u32 time_dest_ptr) {
+  std::scoped_lock lock{background_task_lock};
+  auto il_id = std::string(Ptr<String>(il_id_ptr).c()->data());
+  if (external_il_time_cache.find(il_id) != external_il_time_cache.end()) {
+    const auto& runs = external_il_time_cache.at(il_id);
+    if (index < (int)runs.size()) {
+      const auto& run_info = external_il_time_cache.at(il_id).at(index);
+      std::string converted =
+          get_font_bank(GameTextVersion::JAK2)->convert_utf8_to_game(run_info.first);
+      strcpy(Ptr<String>(name_dest_ptr).c()->data(), converted.c_str());
+      *(Ptr<float>(time_dest_ptr).c()) = run_info.second;
+    } else {
+      std::string converted = get_font_bank(GameTextVersion::JAK2)->convert_utf8_to_game("");
+      strcpy(Ptr<String>(name_dest_ptr).c()->data(), converted.c_str());
+      *(Ptr<float>(time_dest_ptr).c()) = -1.0;
+    }
+  }
+}
+
 void pc_get_external_highscore(u32 highscore_id_ptr,
                                s32 index,
                                u32 name_dest_ptr,
@@ -535,6 +731,15 @@ s32 pc_get_num_external_highscores(u32 highscore_id_ptr) {
   auto highscore_id = std::string(Ptr<String>(highscore_id_ptr).c()->data());
   if (external_highscores_cache.find(highscore_id) != external_highscores_cache.end()) {
     return external_highscores_cache.at(highscore_id).size();
+  }
+  return 0;
+}
+
+s32 pc_get_num_external_il_times(u32 il_id_ptr) {
+  std::scoped_lock lock{background_task_lock};
+  auto il_id = std::string(Ptr<String>(il_id_ptr).c()->data());
+  if (external_il_time_cache.find(il_id) != external_il_time_cache.end()) {
+    return external_il_time_cache.at(il_id).size();
   }
   return 0;
 }

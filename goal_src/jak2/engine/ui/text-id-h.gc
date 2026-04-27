@@ -803,6 +803,7 @@
   (progress-fps-disclaimer #x1315)
   (progress-highscores-local-score #x1316)
   (progress-controller-options-analog-sensitivity #x1317)
+  (progress-highscores-header-individual-levels #x1318)
   (trick-board-none #x1320)
   (trick-board-spin #x1321)
   (trick-board-boost #x1322)

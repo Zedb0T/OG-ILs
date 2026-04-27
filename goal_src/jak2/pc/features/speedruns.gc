@@ -19,8 +19,8 @@
 (set! (-> *speedrun-info* active-practice-objective start-zone-init-params) (new 'static 'objective-zone-init-params))
 (set! (-> *speedrun-info* active-practice-objective end-zone-init-params) (new 'static 'objective-zone-init-params))
 
-(defun get-pb-time ()
-  (case (-> *speedrun-info* category)
+(defun get-pb-time-for-category ((cat speedrun-category))
+  (case cat
     ;; Act 1 ILs
     (((speedrun-category fortress-escape))
       (-> *pc-settings* pb-time-fortress-escape))
@@ -218,6 +218,116 @@
       -1.0)
     )
   )
+
+(defun get-pb-time ()
+  (get-pb-time-for-category (-> *speedrun-info* category)))
+
+;; Keys for the per-IL speedrun.com leaderboard URL map in
+;; game/kernel/jak2/kmachine_extras.cpp `external_il_lookup_urls`. Indexed by
+;; (speedrun-category - 2): row 0 maps to category 2 (fortress-escape) ... row 93
+;; maps to category 95 (stadium-burning-bush-race-class1-r). The two
+;; gun-training ILs (categories 96 and 97) are not on speedrun.com — they're
+;; covered by the gun-course highscore pages — and are intentionally omitted.
+(define *il-speedrun-com-keys* (the-as (array string) (new 'static 'boxed-array :type string :length 94 :allocated-length 94
+  ;; Act 1 ILs (categories 2..26)
+  "fortress-escape"
+  "city-help-kid"
+  "ruins-tower"
+  "atoll-water"
+  "fortress-dump"
+  "city-krew-delivery"
+  "city-red-gun-training"
+  "atoll-sig"
+  "sewer-enemy"
+  "strip-rescue"
+  "atoll-battle"
+  "mountain-lens"
+  "mountain-gear"
+  "mountain-shard"
+  "mountain-collection"
+  "city-keira-delivery"
+  "stadium-board1"
+  "city-krew-collection"
+  "city-yellow-gun-training"
+  "drill-eggs"
+  "city-power"
+  "palace-cable"
+  "palace-boss"
+  "city-shuttle"
+  "ruins-enemy"
+  ;; Act 2 ILs (categories 27..45)
+  "forest-scouts"
+  "city-escort-kid"
+  "dig-knock-down"
+  "strip-grenade"
+  "drill-ship"
+  "city-port-run"
+  "city-meet-brutter"
+  "sewer-board"
+  "forest-hunt"
+  "city-intercept-tanker"
+  "stadium-race-class3"
+  "city-protect-water-slums"
+  "dig-find-totem"
+  "city-destroy-guard-vehicles"
+  "city-play-onin-game"
+  "canyon-insert-items"
+  "tomb-poles"
+  "tomb-water"
+  "tomb-boss"
+  ;; Act 3 ILs (categories 46..67)
+  "fortress-save-friends"
+  "sewer-escort"
+  "stadium-race-class2"
+  "city-stop-bomb-bots"
+  "city-errol-challenge"
+  "strip-drop"
+  "ruins-mech"
+  "forest-protect"
+  "drill-mech"
+  "city-save-lurkers"
+  "stadium-race-class"
+  "palace-sneak-in"
+  "castle-break-in"
+  "castle-boss"
+  "city-whack"
+  "under-mech"
+  "under-sig"
+  "city-defend-stadium"
+  "consite-find-baron"
+  "nest-get-to-gun"
+  "nest-enter"
+  "nest-boss"
+  ;; Side missions (categories 68..95; 96..97 are gun-training ILs without SR.com leaderboards)
+  "city-burning-bush-get-to-1"
+  "city-burning-bush-get-to-2"
+  "city-burning-bush-get-to-3"
+  "city-burning-bush-get-to-4"
+  "city-burning-bush-get-to-5"
+  "city-burning-bush-get-to-6"
+  "city-burning-bush-get-to-7"
+  "city-burning-bush-get-to-8"
+  "city-burning-bush-get-to-9"
+  "city-burning-bush-get-to-10"
+  "city-burning-bush-get-to-11"
+  "city-burning-bush-get-to-12"
+  "city-burning-bush-get-to-13"
+  "city-burning-bush-get-to-14"
+  "city-burning-bush-get-to-15"
+  "city-burning-bush-collection-1"
+  "city-burning-bush-collection-2"
+  "city-burning-bush-collection-3"
+  "city-burning-bush-bombbot-1"
+  "city-burning-bush-racepoint-1"
+  "city-burning-bush-shuttle-1"
+  "city-burning-bush-ring-1"
+  "city-burning-bush-ring-2"
+  "city-burning-bush-ring-3"
+  "city-burning-bush-race-port"
+  "stadium-burning-bush-race-class3-r"
+  "stadium-burning-bush-race-class2-r"
+  "stadium-burning-bush-race-class1-r"
+  )))
 
 (defun maybe-update-best-time ((this speedrun-timer))
   (when (not (or *debug-segment* *cheat-mode*))

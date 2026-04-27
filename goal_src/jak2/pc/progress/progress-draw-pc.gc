@@ -95,7 +95,8 @@
         ((and (>= highscore-index 0) (<= highscore-index 4)) (set! highscore-type 'game))
         ((and (>= highscore-index 5) (<= highscore-index 12)) (set! highscore-type 'race))
         ((= highscore-index 13) (set! highscore-type 'game))
-        ((and (>= highscore-index 15) (<= highscore-index 20)) (set! highscore-type 'speedrun))))
+        ((and (>= highscore-index 15) (<= highscore-index 20)) (set! highscore-type 'speedrun))
+        ((il-highscore-page? highscore-index) (set! highscore-type 'il))))
     highscore-type))
 
 (defun print-highscore-pc ((highscore-row print-highscore-obj) (name string))
@@ -185,7 +186,8 @@
         ((= index 12) (set! available? (logtest? (-> *game-info* secrets) (game-secrets reverse-races))))
         ((= index 13) (set! available? (logtest? (-> *game-info* sub-task-list (game-task-node city-play-onin-game-introduction) flags) (game-task-node-flag closed))))
         ((= index 14) (set! available? (logtest? (-> *game-info* sub-task-list (game-task-node city-whack-introduction) flags) (game-task-node-flag closed))))
-        ((and (>= index 15) (<= index 20)) (set! available? (and (-> *pc-settings* speedrunner-mode?))))))
+        ((and (>= index 15) (<= index 20)) (set! available? (and (-> *pc-settings* speedrunner-mode?))))
+        ((il-highscore-page? index) (set! available? #t))))
     available?))
 
 (defun get-highscore-text ((highscore-index int))
@@ -197,7 +199,8 @@
         ((and (>= index 5) (<= index 12)) (set! id (text-id progress-highscores-header-race)))
         ((= index 13) (set! id (text-id progress-highscores-header-onin)))
         ((= index 14) (set! id (text-id progress-highscores-header-metalhead-mash)))
-        ((and (>= index 15) (<= index 20)) (set! id (text-id progress-highscores-header-speedrun)))))
+        ((and (>= index 15) (<= index 20)) (set! id (text-id progress-highscores-header-speedrun)))
+        ((il-highscore-page? index) (set! id (text-id progress-highscores-header-individual-levels)))))
     (the-as text-id id)))
 
 (defun get-highscore-text-sub ((highscore-index int))
@@ -227,6 +230,18 @@
         ((= index 20) (set! id (text-id progress-highscores-subheader-speedrun-anyhero)))))
     (the-as text-id id)))
 
+(defun print-highscore-subheader ((highscore-index int) (font-ctx font-context))
+  "Prints the subheader text for the highscore page. For IL pages the name
+   comes straight from `*speedrun-category-names*` (no static text-id); for
+   everything else it's looked up via `get-highscore-text-sub`."
+  (cond
+    ((il-highscore-page? highscore-index)
+     (print-game-text (string-format "~S" (il-page-display-name highscore-index))
+                      font-ctx #f 44 (bucket-id progress)))
+    (else
+     (print-game-text (string-format "~S" (lookup-text! *common-text* (get-highscore-text-sub highscore-index) #f))
+                      font-ctx #f 44 (bucket-id progress)))))
+
 (defun get-highscore-icon ((highscore-index int))
   (let ((texture (new 'static 'texture-id :index #x10 :page #xc93)))
     (let ((index highscore-index))
@@ -240,18 +255,20 @@
         ((= index 13) (set! texture (new 'static 'texture-id :index #x16 :page #xc93)))
         ((= index 14) (set! texture (new 'static 'texture-id :index #x17 :page #xc93)))
         ;; TODO - maybe i can lookup some unique icons for the categories? Maybe some of the bigmap ones? for now just the jetboard because fast
-        ((and (>= index 15) (<= index 20)) (set! texture (new 'static 'texture-id :index #xe :page #xc93)))))
+        ((and (>= index 15) (<= index 20)) (set! texture (new 'static 'texture-id :index #xe :page #xc93)))
+        ;; IL pages reuse the race trophy icon since each IL is timed like a race.
+        ((il-highscore-page? index) (set! texture (new 'static 'texture-id :index #x1 :page #xc93)))))
     (the-as texture-id texture)))
 
 (defun get-num-highscores ()
   (let ((count 0))
-    (dotimes (max-highscores (if (-> *pc-settings* speedrunner-mode?) 21 15))
+    (dotimes (max-highscores IL-HIGHSCORE-PAGE-END)
       (when (highscore-available? max-highscores)
         (+! count 1)))
     count))
 
 (defun get-next-highscore ((current-highscore-index int))
-  (let ((max-highscores (if (-> *pc-settings* speedrunner-mode?) 21 15))
+  (let ((max-highscores IL-HIGHSCORE-PAGE-END)
         (index-change 1)
         (selected-index -1))
     (+ current-highscore-index index-change)
@@ -265,7 +282,7 @@
     selected-index))
 
 (defun get-prev-highscore ((current-highscore-index int))
-  (let ((max-highscores (if (-> *pc-settings* speedrunner-mode?) 21 15))
+  (let ((max-highscores IL-HIGHSCORE-PAGE-END)
         (index-change 1)
         (selected-index -1))
     (+ current-highscore-index index-change)
@@ -292,7 +309,8 @@
       ((and (>= highscore-index 5) (<= highscore-index 12)) (set! scale race-scale))
       ((= highscore-index 13) (set! scale 0.7))
       ((= highscore-index 14) (set! scale 0.7))
-      ((and (>= highscore-index 15) (<= highscore-index 20)) (set! scale 0.5)))
+      ((and (>= highscore-index 15) (<= highscore-index 20)) (set! scale 0.5))
+      ((il-highscore-page? highscore-index) (set! scale race-scale)))
     scale))
 
 (defun get-highscore-icon-xoffset ((highscore-index int))
@@ -327,7 +345,11 @@
     ((17) (pc-get-external-speedrun-time "allmissions" row-index *pc-cpp-temp-string* (&-> *progress-pc-generic-store* custom-highscore-score)))
     ((18) (pc-get-external-speedrun-time "100" row-index *pc-cpp-temp-string* (&-> *progress-pc-generic-store* custom-highscore-score)))
     ((19) (pc-get-external-speedrun-time "anyorbs" row-index *pc-cpp-temp-string* (&-> *progress-pc-generic-store* custom-highscore-score)))
-    ((20) (pc-get-external-speedrun-time "anyhero" row-index *pc-cpp-temp-string* (&-> *progress-pc-generic-store* custom-highscore-score)))))
+    ((20) (pc-get-external-speedrun-time "anyhero" row-index *pc-cpp-temp-string* (&-> *progress-pc-generic-store* custom-highscore-score)))
+    (else
+      (when (il-highscore-page? highscore-index)
+        (pc-get-external-il-time (il-page-key highscore-index) row-index *pc-cpp-temp-string*
+                                 (&-> *progress-pc-generic-store* custom-highscore-score))))))
 
 (defun draw-highscore-page-up-down-arrows ((font-ctx font-context) (draw-up? symbol) (draw-down? symbol))
   (let ((new-x-pos 58.0)
@@ -360,9 +382,13 @@
   (none))
 
 (defun progress-pc-local-entry-label ((highscore-index int))
-  (if (and (>= highscore-index 5) (<= highscore-index 12))
-    (text-id progress-highscores-local-time)
-    (text-id progress-highscores-local-score)))
+  (cond
+    ((and (>= highscore-index 5) (<= highscore-index 12))
+      (text-id progress-highscores-local-time))
+    ((il-highscore-page? highscore-index)
+      (text-id progress-highscores-local-time))
+    (else
+      (text-id progress-highscores-local-score))))
 
 (defun progress-pc-get-next-score ((highscore-index int) (rows-already-printed int))
   "Fetches the next valid score, merges with local scores.  Score will be returned, name will be in [[*pc-cpp-temp-string*]]
@@ -408,6 +434,62 @@
         ;; case where we only have external times left
         ((< external-index max-external-times)
          (progress-pc-get-external-time highscore-index external-index)
+         (if return-next-value?
+           (return (-> *progress-pc-generic-store* custom-highscore-score))
+           (inc! external-index))))
+      (inc! times-enumerated))
+    -1.0))
+
+(defun progress-pc-il-get-next-score ((highscore-index int) (rows-already-printed int))
+  "IL variant of progress-pc-get-next-score. Local data is a single PB float
+   from `*pc-settings*`, and we sort lower-time-wins (vs the higher-score-wins
+   logic the highscore version uses). Returns the next merged score and writes
+   the player name into `*pc-cpp-temp-string*`."
+  (let* ((il-cat (il-page-category highscore-index))
+         (il-key (il-page-key highscore-index))
+         (local-pb (get-pb-time-for-category il-cat))
+         (has-local? (> local-pb 0.0))
+         (local-shown? #f)
+         (external-index 0)
+         (max-external-times (pc-get-num-external-il-times il-key))
+         (return-next-value? #f)
+         (times-enumerated 0)
+         (total-rows (+ (if has-local? 1 0) max-external-times)))
+    (while (< times-enumerated total-rows)
+      (when (>= times-enumerated rows-already-printed)
+        (set! return-next-value? #t))
+      (cond
+        ;; Both local PB still pending and external times still available:
+        ;; emit whichever is faster (lower time) next.
+        ((and has-local? (not local-shown?) (< external-index max-external-times))
+         (pc-get-external-il-time il-key external-index *pc-cpp-temp-string*
+                                  (&-> *progress-pc-generic-store* custom-highscore-score))
+         (cond
+           ((<= local-pb (-> *progress-pc-generic-store* custom-highscore-score))
+            ;; local PB is at least as fast — emit it now.
+            (set! local-shown? #t)
+            (when return-next-value?
+              (clear *pc-cpp-temp-string*)
+              (format *pc-cpp-temp-string* "~S~S" "~[~1L"
+                      (lookup-text! *common-text* (progress-pc-local-entry-label highscore-index) #f))
+              (return local-pb)))
+           (else
+            ;; external is faster — emit it.
+            (if return-next-value?
+              (return (-> *progress-pc-generic-store* custom-highscore-score))
+              (inc! external-index)))))
+        ;; Only local left.
+        ((and has-local? (not local-shown?))
+         (set! local-shown? #t)
+         (when return-next-value?
+           (clear *pc-cpp-temp-string*)
+           (format *pc-cpp-temp-string* "~S~S" "~[~1L"
+                   (lookup-text! *common-text* (progress-pc-local-entry-label highscore-index) #f))
+           (return local-pb)))
+        ;; Only external left.
+        ((< external-index max-external-times)
+         (pc-get-external-il-time il-key external-index *pc-cpp-temp-string*
+                                  (&-> *progress-pc-generic-store* custom-highscore-score))
          (if return-next-value?
            (return (-> *progress-pc-generic-store* custom-highscore-score))
            (inc! external-index))))
@@ -496,12 +578,15 @@
         (set-scale! font-ctx 0.65))
       (print-game-text (string-format "~S" (lookup-text! *common-text* (get-highscore-text (-> this page-index)) #f)) font-ctx #f 44 (bucket-id progress))
 
-      ;; now draw highscore subtitle (e.g 'Scatter Gun')
+      ;; now draw highscore subtitle (e.g 'Scatter Gun', or the IL name for IL pages)
       (+! (-> font-ctx origin y) 25.0)
       (set-scale! font-ctx 0.6)
       (when (text-language? french spanish)
         (set-scale! font-ctx 0.58))
-      (print-game-text (string-format "~S" (lookup-text! *common-text* (get-highscore-text-sub (-> this page-index)) #f)) font-ctx #f 44 (bucket-id progress))
+      ;; IL names are longer than the static subheaders; shrink so they fit.
+      (when (il-highscore-page? (-> this page-index))
+        (set-scale! font-ctx 0.5))
+      (print-highscore-subheader (-> this page-index) font-ctx)
 
       ;; draw highscore icon
       (set! (-> font-ctx origin x) (- (-> font-ctx origin x) (+ padding row-width)))
@@ -525,13 +610,25 @@
         (case (get-highscore-type (-> this page-index))
           (('game) (set! (-> highscore-row game-score) #t))
           (('race) (set! (-> highscore-row game-score) #f))
-          (('speedrun) (set! (-> highscore-row game-score) #f)))
+          (('speedrun) (set! (-> highscore-row game-score) #f))
+          (('il) (set! (-> highscore-row game-score) #f)))
         (set! (-> highscore-row context) font-ctx)
         (set! (-> highscore-row local-scale) alpha)
         (set! (-> highscore-row interp) row-width)
         ;; retrieve the scores and draw them
-        (if (-> *pc-settings* speedrunner-mode?)
-          (cond
+        (cond
+          ;; IL pages always show merged local PB + speedrun.com leaderboard,
+          ;; regardless of speedrunner-mode (the IL menu IS the speedrun feature here).
+          ((= (get-highscore-type (-> this page-index)) 'il)
+           (dotimes (row-index 8)
+             (let* ((num-rows-already-printed (+ row-index (* (-> *progress-pc-generic-store* current-highscore-page-index) 8)))
+                    (score (progress-pc-il-get-next-score (-> this page-index) num-rows-already-printed)))
+               (set! (-> highscore-row place) row-index)
+               (set! (-> highscore-row score) score)
+               (when (> score 0)
+                 (print-highscore-pc highscore-row *pc-cpp-temp-string*)))))
+          ((-> *pc-settings* speedrunner-mode?)
+           (cond
             ((= (get-highscore-type (-> this page-index)) 'speedrun)
              ;; speedruns are easy, there are no local times
              (dotimes (row-index 8)
@@ -551,11 +648,12 @@
                  (set! (-> highscore-row place) row-index)
                  (set! (-> highscore-row score) score)
                  (when (> score 0)
-                   (print-highscore-pc highscore-row *pc-cpp-temp-string*))))))
-          (dotimes (row-index 8)
-            (set! (-> highscore-row place) row-index)
-            (set! (-> highscore-row score) (-> score-ptr row-index))
-            (print-highscore-pc highscore-row (the-as string #f)))))
+                   (print-highscore-pc highscore-row *pc-cpp-temp-string*)))))))
+          (else
+           (dotimes (row-index 8)
+             (set! (-> highscore-row place) row-index)
+             (set! (-> highscore-row score) (-> score-ptr row-index))
+             (print-highscore-pc highscore-row (the-as string #f))))))
       (set! (-> font-ctx origin x) old-font-origin-x)
 
       ;; draw the previous highscore that was seen
@@ -592,7 +690,9 @@
       (set-scale! font-ctx 0.6)
       (when (text-language? french spanish)
         (set-scale! font-ctx 0.58))
-      (print-game-text (string-format "~S" (lookup-text! *common-text* (get-highscore-text-sub (-> this prev-page-index)) #f)) font-ctx #f 44 (bucket-id progress))
+      (when (il-highscore-page? (-> this prev-page-index))
+        (set-scale! font-ctx 0.5))
+      (print-highscore-subheader (-> this prev-page-index) font-ctx)
       (set! (-> font-ctx origin x) (- (-> font-ctx origin x) (+ padding unknown-todo)))
       (+! (-> font-ctx origin y) 25.0)
       (draw-highscore-icon
@@ -605,7 +705,8 @@
       (set-color! font-ctx (font-color progress))
       (+! (-> font-ctx origin x) unknown-todo)
       (set-scale! font-ctx 0.6)
-      (when (< 1 (get-num-highscores))
+      (when (and (< 1 (get-num-highscores))
+                 (!= (get-highscore-type (-> this prev-page-index)) 'il))
         (let ((gp-11 (get-game-score-ref *game-info* (get-highscore-score (-> this prev-page-index)))))
           (set! (-> highscore-row index) (-> this prev-page-index))
           (set! (-> highscore-row previous) #t)

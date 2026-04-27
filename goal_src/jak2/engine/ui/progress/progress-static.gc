@@ -539,7 +539,7 @@
     :y-space 30
     :scale 0.82
     :options (new 'static 'boxed-array :type menu-option
-      (new 'static 'menu-highscores-option :num-pages 15 :slide-dir 1.0)
+      (new 'static 'menu-highscores-option :num-pages 115 :slide-dir 1.0)
       )
     )
   )

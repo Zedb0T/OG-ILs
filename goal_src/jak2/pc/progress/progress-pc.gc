@@ -122,6 +122,32 @@
   (set! (-> *progress-state-pc* music-player-track) #f)
   )
 
+;; Per-IL highscore pages. Each speedrun-category from
+;; IL-HIGHSCORE-FIRST-CATEGORY (=2, fortress-escape) up gets its own highscore
+;; page starting at IL-HIGHSCORE-PAGE-START (=21). The two gun-training ILs
+;; (categories 96 and 97) have no speedrun.com leaderboard, so we cap at 94 ILs.
+(defconstant IL-HIGHSCORE-PAGE-START 21)
+(defconstant IL-HIGHSCORE-PAGE-COUNT 94)
+(defconstant IL-HIGHSCORE-PAGE-END   (+ IL-HIGHSCORE-PAGE-START IL-HIGHSCORE-PAGE-COUNT)) ;; exclusive
+(defconstant IL-HIGHSCORE-FIRST-CATEGORY 2)
+
+(defun il-highscore-page? ((highscore-index int))
+  (and (>= highscore-index IL-HIGHSCORE-PAGE-START)
+       (< highscore-index IL-HIGHSCORE-PAGE-END)))
+
+(defun il-page-category ((highscore-index int))
+  "speedrun-category for a given IL highscore page index."
+  (the-as speedrun-category (+ (- highscore-index IL-HIGHSCORE-PAGE-START)
+                               IL-HIGHSCORE-FIRST-CATEGORY)))
+
+(defun il-page-key ((highscore-index int))
+  "speedrun.com URL key for a given IL highscore page index."
+  (-> *il-speedrun-com-keys* (- highscore-index IL-HIGHSCORE-PAGE-START)))
+
+(defun il-page-display-name ((highscore-index int))
+  "Display name for a given IL highscore page index."
+  (-> *speedrun-category-names* (the int (il-page-category highscore-index))))
+
 (defun progress-pc-fetch-external-times ((highscore-index int))
   (when (-> *pc-settings* speedrunner-mode?)
     (case highscore-index
@@ -145,7 +171,11 @@
       ((17) (pc-fetch-external-speedrun-times "allmissions"))
       ((18) (pc-fetch-external-speedrun-times "100"))
       ((19) (pc-fetch-external-speedrun-times "anyorbs"))
-      ((20) (pc-fetch-external-speedrun-times "anyhero")))))
+      ((20) (pc-fetch-external-speedrun-times "anyhero"))
+      (else
+        ;; Individual Level pages: 21..(21+94-1)=114, one page per IL.
+        (when (il-highscore-page? highscore-index)
+          (pc-fetch-external-il-times (il-page-key highscore-index)))))))
 
 (defmethod set-menu-options ((obj progress) (arg0 symbol))
   "Set the menu options for the menu state specified by arg0."
@@ -926,7 +956,12 @@
     ((11) (pc-get-num-external-race-times "class2rev"))
     ((12) (pc-get-num-external-race-times "class1rev"))
     ((13) (pc-get-num-external-highscores "onin"))
-    ((14) (pc-get-num-external-highscores "mash"))))
+    ((14) (pc-get-num-external-highscores "mash"))
+    (else
+      (cond
+        ((il-highscore-page? highscore-index)
+          (pc-get-num-external-il-times (il-page-key highscore-index)))
+        (else 0)))))
 
 (defun progress-pc-max-highscore-rows ((highscore-index int))
   (case highscore-index
@@ -951,7 +986,13 @@
     ((18) (pc-get-num-external-speedrun-times "100"))
     ((19) (pc-get-num-external-speedrun-times "anyorbs"))
     ((20) (pc-get-num-external-speedrun-times "anyhero"))
-    (else 8)))
+    (else
+      (cond
+        ((il-highscore-page? highscore-index)
+          ;; Local PB (0 or 1) merged with external SR.com times.
+          (+ (if (> (get-pb-time-for-category (il-page-category highscore-index)) 0.0) 1 0)
+             (pc-get-num-external-il-times (il-page-key highscore-index))))
+        (else 8)))))
 
 (defmethod respond-progress menu-highscores-option ((this menu-highscores-option) (progress progress) (selected? symbol))
   "Handle progress menu navigation logic."
@@ -988,14 +1029,14 @@
            (set! (-> this slide-dir) 1.0)))
         ((or (cpad-pressed? 0 down l-analog-down)
              (and (cpad-hold? 0 down l-analog-down) (>= (- (current-time) (-> this last-move)) (seconds 0.2))))
-         (when (and (-> *pc-settings* speedrunner-mode?)
+         (when (and (or (-> *pc-settings* speedrunner-mode?) (il-highscore-page? (-> this page-index)))
                     (< (* (inc (-> *progress-pc-generic-store* current-highscore-page-index)) 8) (progress-pc-max-highscore-rows (-> this page-index))))
           (set! (-> this last-move) (current-time))
           (sound-play "secrets-scroll")
           (inc! (-> *progress-pc-generic-store* current-highscore-page-index))))
         ((or (cpad-pressed? 0 up l-analog-up)
              (and (cpad-hold? 0 up l-analog-up) (>= (- (current-time) (-> this last-move)) (seconds 0.2))))
-         (when (and (-> *pc-settings* speedrunner-mode?)
+         (when (and (or (-> *pc-settings* speedrunner-mode?) (il-highscore-page? (-> this page-index)))
                     (> (-> *progress-pc-generic-store* current-highscore-page-index) 0))
           (set! (-> this last-move) (current-time))
           (sound-play "secrets-scroll")
