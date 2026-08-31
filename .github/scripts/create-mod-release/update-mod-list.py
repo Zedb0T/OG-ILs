@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-MOD_ID = "og-ils"
 ASSET_NAMES = {
     "windows": "windows-{version}.zip",
     "linux": "linux-{version}.tar.gz",
@@ -18,6 +17,26 @@ ASSET_NAMES = {
 
 def comma_separated_environment(name: str, default: str) -> list[str]:
     return [value.strip() for value in os.environ.get(name, default).split(",") if value.strip()]
+
+
+def select_mod(mod_list: dict) -> tuple[str, dict]:
+    mods = mod_list.get("mods", {})
+    requested_mod_id = os.environ.get("MOD_ID", "").strip()
+    if requested_mod_id:
+        if requested_mod_id not in mods:
+            raise KeyError(
+                f"MOD_ID {requested_mod_id!r} was not found; available mods: {', '.join(mods)}"
+            )
+        return requested_mod_id, mods[requested_mod_id]
+
+    if len(mods) != 1:
+        raise ValueError(
+            "mod_list.json must contain exactly one mod when MOD_ID is not set; "
+            f"found: {', '.join(mods) or 'none'}"
+        )
+
+    mod_id = next(iter(mods))
+    return mod_id, mods[mod_id]
 
 
 def main() -> None:
@@ -42,7 +61,7 @@ def main() -> None:
     with mod_list_path.open("r", encoding="utf-8") as mod_list_file:
         mod_list = json.load(mod_list_file)
 
-    mod = mod_list["mods"][MOD_ID]
+    mod_id, mod = select_mod(mod_list)
     base_url = f"https://github.com/{repository}/releases/download/{version_tag}"
     assets = {
         platform: f"{base_url}/{ASSET_NAMES[platform].format(version=version_tag)}"
@@ -74,7 +93,7 @@ def main() -> None:
         json.dump(mod_list, mod_list_file, indent=2, ensure_ascii=False)
         mod_list_file.write("\n")
 
-    print(f"Updated {mod_list_path} with release {version_tag}")
+    print(f"Updated mod {mod_id!r} in {mod_list_path} with release {version_tag}")
 
 
 if __name__ == "__main__":
