@@ -1,0 +1,73 @@
+name: Update Testing Mod List
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag (for example, v0.1.16). Leave empty to use the latest release."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-testing-mod-list-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update_mod_list:
+    name: Update Testing Mod List
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out modlist branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.repository.default_branch || github.ref_name }}
+
+      - name: Resolve release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+          PUBLISHED_VERSION: ${{ github.event.release.tag_name }}
+        run: |
+          VERSION="$REQUESTED_VERSION"
+          if [[ -z "$VERSION" ]]; then
+            VERSION="$PUBLISHED_VERSION"
+          fi
+          if [[ -z "$VERSION" ]]; then
+            VERSION=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq '.tagName')
+          fi
+
+          PUBLISHED_AT=$(gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json publishedAt --jq '.publishedAt')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "published_at=$PUBLISHED_AT" >> "$GITHUB_OUTPUT"
+
+      - name: Generate mod_list.json
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          PUBLISHED_AT: ${{ steps.release.outputs.published_at }}
+          SUPPORTED_GAMES: jak2,jak3
+          RELEASE_PLATFORMS: windows,linux
+        run: python ./.github/scripts/create-mod-release/update-mod-list.py
+
+      - name: Commit modlist
+        shell: bash
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          TARGET_BRANCH: ${{ github.event_name == 'release' && github.event.repository.default_branch || github.ref_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add mod_list.json
+          if git diff --cached --quiet; then
+            echo "mod_list.json already contains $VERSION"
+            exit 0
+          fi
+          git commit -m "Update testing modlist for $VERSION"
+          git push origin "HEAD:$TARGET_BRANCH"

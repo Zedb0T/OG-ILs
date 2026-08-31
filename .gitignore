@@ -107,3 +107,4 @@ out/jak2/fr3.rar
 goalc-report.html
 .vscode/PythonImportHelper-v2-Completion.json
 *.json
+!/mod_list.json
