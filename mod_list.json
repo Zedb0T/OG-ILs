@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "sourceName": "OG-ILs Testing",
-  "lastUpdated": "2026-08-25T18:11:03Z",
+  "lastUpdated": "2026-08-31T19:03:19Z",
   "mods": {
     "og-ils-test": {
       "displayName": "poop poop",
@@ -21,7 +21,7 @@
       "versions": [
         {
           "version": "0.1.16",
-          "publishedDate": "2026-08-25T18:11:03Z",
+          "publishedDate": "2026-08-31T18:55:25Z",
           "supportedGames": [
             "jak2",
             "jak3"
