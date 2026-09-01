@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "sourceName": "OG-ILs Testing",
-  "lastUpdated": "2026-09-01T00:36:30Z",
+  "lastUpdated": "2026-09-01T03:05:00Z",
   "mods": {
     "og-ils-test": {
       "displayName": "poop poop",
@@ -19,6 +19,22 @@
         "jak3"
       ],
       "versions": [
+        {
+          "version": "0.1.18",
+          "publishedDate": "2026-09-01T02:58:04Z",
+          "supportedGames": [
+            "jak2",
+            "jak3"
+          ],
+          "assets": {
+            "windows": "https://github.com/Zedb0T/OG-ILs/releases/download/v0.1.18/windows-v0.1.18.zip",
+            "linux": "https://github.com/Zedb0T/OG-ILs/releases/download/v0.1.18/linux-v0.1.18.tar.gz"
+          },
+          "assetDownloadCounts": {
+            "windows": 0,
+            "linux": 0
+          }
+        },
         {
           "version": "0.1.17",
           "publishedDate": "2026-08-31T23:32:29Z",
