@@ -2,10 +2,13 @@
 
 #include <bitset>
 #include <regex>
+#include <sstream>
 
 #include "kscheme.h"
 
+#include "common/replay/replay_format.h"
 #include "common/symbols.h"
+#include "common/util/FileUtil.h"
 #include "common/util/font/font_utils.h"
 
 #include "game/external/discord_jak3.h"
@@ -13,12 +16,115 @@
 #include "game/kernel/common/kmachine.h"
 #include "game/kernel/common/kscheme.h"
 #include "game/overlord/jak3/iso_cd.h"
-
-#include <sstream>
+#include "game/runtime.h"
 
 namespace jak3 {
 namespace kmachine_extras {
 AutoSplitterBlock g_auto_splitter_block_jak3;
+
+namespace {
+replay::Recorder g_replay_recorder;
+
+fs::path replay_directory_for(std::string_view category) {
+  return file_util::get_user_features_dir(g_game_version) / "replays" / std::string(category);
+}
+
+void save_recording(const replay::File& recording) {
+  const auto directory = replay_directory_for(recording.category);
+  replay::atomic_save(directory / "last-attempt.ogr.json", recording);
+  replay::atomic_save(
+      directory / (recording.completed ? "last-completed.ogr.json" : "last-unfinished.ogr.json"),
+      recording);
+}
+}  // namespace
+
+u64 pc_replay_recording_start(s64 start_ticks, u32 category_ptr) {
+  if (!category_ptr) {
+    return bool_to_symbol(false);
+  }
+  try {
+    auto* category_string = Ptr<String>(category_ptr).c();
+    const auto category = std::string_view(category_string->data(), category_string->len);
+    const auto started = g_replay_recorder.start("jak3", category, start_ticks);
+    if (started) {
+      lg::info("replay: started local recording for {}", category);
+    } else {
+      lg::warn("replay: refused invalid category '{}'", category);
+    }
+    return bool_to_symbol(started);
+  } catch (const std::exception& error) {
+    g_replay_recorder.cancel();
+    lg::error("replay: could not start recording: {}", error.what());
+    return bool_to_symbol(false);
+  }
+}
+
+u64 pc_replay_recording_sample(s64 now_ticks,
+                               u32 position_ptr,
+                               u32 rotation_ptr,
+                               u32 velocity_ptr) {
+  if (!position_ptr || !rotation_ptr || !velocity_ptr) {
+    return bool_to_symbol(false);
+  }
+  try {
+    const auto* position = Ptr<Vector>(position_ptr).c();
+    const auto* rotation = Ptr<Vector>(rotation_ptr).c();
+    const auto* velocity = Ptr<Vector>(velocity_ptr).c();
+    const auto recorded = g_replay_recorder.add_sample(now_ticks, position->data, rotation->data,
+                                                       velocity->data, "none", "", 0);
+    if (recorded && g_replay_recorder.sample_count() == 1) {
+      lg::info("replay: captured first local sample");
+    }
+    return bool_to_symbol(recorded);
+  } catch (const std::exception& error) {
+    g_replay_recorder.cancel();
+    lg::error("replay: stopped recording after sample error: {}", error.what());
+    return bool_to_symbol(false);
+  }
+}
+
+u64 pc_replay_recording_sample_metadata(u32 state_ptr, u32 animation_ptr, u32 status) {
+  if (!state_ptr || !animation_ptr) {
+    return bool_to_symbol(false);
+  }
+  try {
+    auto* state_string = Ptr<String>(state_ptr).c();
+    auto* animation_string = Ptr<String>(animation_ptr).c();
+    const auto state = std::string_view(state_string->data(), state_string->len);
+    const auto animation = std::string_view(animation_string->data(), animation_string->len);
+    return bool_to_symbol(g_replay_recorder.update_last_sample_metadata(state, animation, status));
+  } catch (const std::exception& error) {
+    g_replay_recorder.cancel();
+    lg::error("replay: stopped recording after metadata error: {}", error.what());
+    return bool_to_symbol(false);
+  }
+}
+
+u64 pc_replay_recording_finish(u32 completed_symbol) {
+  if (!g_replay_recorder.active()) {
+    return bool_to_symbol(false);
+  }
+  try {
+    const auto recording = g_replay_recorder.finish(completed_symbol != s7.offset);
+    save_recording(recording);
+    lg::info("replay: saved {} {} attempt with {} samples{}", recording.category,
+             recording.completed ? "completed" : "unfinished", recording.samples.size(),
+             recording.truncated ? " (duration limit reached)" : "");
+    return bool_to_symbol(true);
+  } catch (const std::exception& error) {
+    g_replay_recorder.cancel();
+    lg::error("replay: could not save recording: {}", error.what());
+    return bool_to_symbol(false);
+  }
+}
+
+u64 pc_replay_recording_active() {
+  return bool_to_symbol(g_replay_recorder.active());
+}
+
+s64 pc_replay_recording_count() {
+  return static_cast<s64>(g_replay_recorder.sample_count());
+}
 
 void update_discord_rpc(u32 discord_info) {
   if (gDiscordRpcEnabled) {
@@ -620,8 +726,8 @@ void callback_fetch_external_any_mission_times(bool success,
 }
 
 void callback_fetch_external_warp_mission_times(bool success,
-                                               const std::string& cache_id,
-                                               std::optional<std::string> result) {
+                                                const std::string& cache_id,
+                                                std::optional<std::string> result) {
   std::scoped_lock lock{background_task_lock};
 
   if (!success) {
@@ -731,12 +837,14 @@ void pc_fetch_external_mission_times(u32 mission_id_ptr, u32 p_warp) {
       // otherwise, hit the URL
       WebRequestJobPayload req;
       req.callback = callback_fetch_external_any_mission_times;
-      req.url = fmt::format("https://www.speedrun.com/api/v1/leaderboards/j1l7q0zd/level/{}/rkl7n8qd?embed=players&max=200", mission_level_ids.at(mission_id));
+      req.url = fmt::format(
+          "https://www.speedrun.com/api/v1/leaderboards/j1l7q0zd/level/{}/"
+          "rkl7n8qd?embed=players&max=200",
+          mission_level_ids.at(mission_id));
       req.cache_id = mission_id;
       g_background_worker.enqueue_webrequest(req);
     }
-  }
-  else {
+  } else {
     // major % warp
     if (warp_mission_times_cache.find(mission_id) == warp_mission_times_cache.end()) {
       intern_from_c(-1, 0, "*pc-waiting-on-rpc?*")->value() = bool_to_symbol(true);
@@ -744,7 +852,10 @@ void pc_fetch_external_mission_times(u32 mission_id_ptr, u32 p_warp) {
       // otherwise, hit the URL
       WebRequestJobPayload req;
       req.callback = callback_fetch_external_warp_mission_times;
-      req.url = fmt::format("https://www.speedrun.com/api/v1/leaderboards/j1l7q0zd/level/{}/7dgw7742?embed=players&max=200", mission_level_ids.at(mission_id));
+      req.url = fmt::format(
+          "https://www.speedrun.com/api/v1/leaderboards/j1l7q0zd/level/{}/"
+          "7dgw7742?embed=players&max=200",
+          mission_level_ids.at(mission_id));
       req.cache_id = mission_id;
       g_background_worker.enqueue_webrequest(req);
     }
@@ -813,7 +924,10 @@ void pc_get_external_race_time(u32 race_id_ptr, s32 index, u32 name_dest_ptr, u3
   }
 }
 
-void pc_get_external_any_mission_time(u32 mission_id_ptr, s32 index, u32 name_dest_ptr, u32 time_dest_ptr) {
+void pc_get_external_any_mission_time(u32 mission_id_ptr,
+                                      s32 index,
+                                      u32 name_dest_ptr,
+                                      u32 time_dest_ptr) {
   std::scoped_lock lock{background_task_lock};
   auto mission_id = std::string(Ptr<String>(mission_id_ptr).c()->data());
   // any%
@@ -834,9 +948,9 @@ void pc_get_external_any_mission_time(u32 mission_id_ptr, s32 index, u32 name_de
 }
 
 void pc_get_external_warp_mission_time(u32 mission_id_ptr,
-                                      s32 index,
-                                      u32 name_dest_ptr,
-                                      u32 time_dest_ptr) {
+                                       s32 index,
+                                       u32 name_dest_ptr,
+                                       u32 time_dest_ptr) {
   std::scoped_lock lock{background_task_lock};
   auto mission_id = std::string(Ptr<String>(mission_id_ptr).c()->data());
   // major % warp

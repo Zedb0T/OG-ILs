@@ -60,15 +60,15 @@ code is introduced.
 
 ## Phase 1 — Bounded local recording only
 
-- [ ] Add a minimal replay sample format for time, position, rotation, velocity,
+- [x] Add a minimal replay sample format for time, position, rotation, velocity,
       state, and optional animation metadata.
-- [ ] Allocate recording storage once with an explicit maximum duration.
-- [ ] Start recording at the real IL start signal.
-- [ ] Stop safely on completion, mission failure, reset, and exit.
-- [ ] Save completed and unfinished attempts locally using an atomic write.
-- [ ] Reject malformed, oversized, and incompatible replay files.
-- [ ] Do not add playback, networking, menus, or submission yet.
-- [ ] Add parser/serializer round-trip and bounds tests.
+- [x] Allocate recording storage once with an explicit maximum duration.
+- [x] Start recording at the real IL start signal.
+- [x] Stop safely on completion, mission failure, reset, and exit.
+- [x] Save completed and unfinished attempts locally using an atomic write.
+- [x] Reject malformed, oversized, and incompatible replay files.
+- [x] Do not add playback, networking, menus, or submission yet.
+- [x] Add parser/serializer round-trip and bounds tests.
 
 Gate: 25 start/reset cycles and 10 completed runs with no heap or handle growth.
 
@@ -267,4 +267,5 @@ Add one line after each accepted phase:
 ```text
 YYYY-MM-DD | Phase N | PASS/FAIL | commit | retail log | memory before/after | notes
 2026-09-02 | Phase 0 | PASS | this commit | jak3.2026-09-02T14-12-18.log | global 50,650,852 -> 50,650,852; PC processes 5 -> 5; retry WS 909,537,280-909,717,504 | source-driven retail lifecycle harness removed; final harness-free boot jak3.2026-09-02T14-15-03.log
+2026-09-02 | Phase 1 | PASS | this commit | jak3.2026-09-02T15-33-25.log | global 50,652,644 -> 50,652,644; active/PC processes 283/5 -> 283/5; steady WS 916,873,216-917,188,608; handles 648 transient -> 644 | 25 reset cycles, 10 completed saves, and one real mission completion; split wide native sample bridge and sanitize GOAL byte metadata; harness retained but disabled; final harness-free boot jak3.2026-09-02T15-41-59.log
 ```

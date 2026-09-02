@@ -351,7 +351,9 @@
   "menu.o"
   "popup-menu.o" ;; added
   "speedruns.o" ;; added
+  "replay-record.o" ;; bounded local replay recording
   ;; "phase0-smoke-test.o" ;; opt-in Phase 0 lifecycle reference harness
+  ;; "phase1-record-test.o" ;; opt-in Phase 1 recording stress harness
   "drawable.o"
   "drawable-group.o"
   "drawable-inline-array.o"

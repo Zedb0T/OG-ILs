@@ -1,0 +1,52 @@
+;;-*-Lisp-*-
+(in-package goal)
+
+;; Phase 1: bounded local replay recording only. Playback, networking, and UI
+;; intentionally do not belong in this module.
+
+(define-extern pc-replay-recording-start (function time-frame string symbol))
+(define-extern pc-replay-recording-sample
+  (function time-frame vector vector vector symbol))
+(define-extern pc-replay-recording-sample-metadata
+  (function string string collide-status symbol))
+(define-extern pc-replay-recording-finish (function symbol symbol))
+(define-extern pc-replay-recording-active? (function symbol))
+(define-extern pc-replay-recording-count (function int))
+
+(defun replay-record-start! ()
+  "Start at the speedrun manager's real player-control release signal."
+  (pc-replay-recording-start
+    (get-real-current-time)
+    (enum->string speedrun-category (-> *speedrun-info* category)))
+  (none))
+
+(defun replay-record-frame! ()
+  "Capture one bounded sample. All native storage is allocated once and reused."
+  (when (and (pc-replay-recording-active?)
+             *target*
+             (-> *target* control))
+    (let* ((ctrl (-> *target* control))
+           (state-name
+             (if (-> *target* next-state)
+                 (symbol->string (-> *target* next-state name))
+                 "none"))
+           ;; Animation metadata is optional in schema v1. Do not walk the
+           ;; streamed joint-animation graph while a task is entering/leaving;
+           ;; those pointers are not lifetime-stable across mission resets.
+           (animation-name ""))
+      (pc-replay-recording-sample
+        (get-real-current-time)
+        (-> ctrl trans)
+        (the-as vector (-> ctrl quat))
+        (-> ctrl transv))
+      (pc-replay-recording-sample-metadata
+        state-name
+        animation-name
+        (-> ctrl status))))
+  (none))
+
+(defun replay-record-stop! ((completed? symbol))
+  "Atomically save the attempt if recording is active."
+  (when (pc-replay-recording-active?)
+    (pc-replay-recording-finish completed?))
+  (none))

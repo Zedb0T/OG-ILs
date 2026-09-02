@@ -12,6 +12,10 @@
 
 (define-extern *pc-dead-pool* dead-pool)
 
+(define-extern replay-record-start! (function none))
+(define-extern replay-record-frame! (function none))
+(define-extern replay-record-stop! (function symbol none))
+
 (define *speedrun-info* (new 'static 'speedrun-info))
 
 (set! (-> *speedrun-info* active-custom-category) (new 'static 'speedrun-custom-category))
@@ -1021,6 +1025,7 @@
     (true! (-> this stopped?))
     (set! (-> this end-time) (get-real-current-time))
     (set! (-> this recorded-time) (* (the float (- (-> this end-time) (-> this start-time))) 0.0033333334))
+    (replay-record-stop! #t)
     (maybe-update-best-time this)
     ;; spawn function to bring up end screen whenever we can
     (process-spawn-function process (lambda :behavior process ()
@@ -1056,6 +1061,7 @@
   (-> this recorded-time))
 
 (defmethod set-category! ((this speedrun-info) (category speedrun-category))
+  (replay-record-stop! #f)
   (reset! (the-as speedrun-timer (ppointer->process (-> *speedrun-manager* 0 timer))))
   (set! (-> this category) category))
 
@@ -1232,6 +1238,8 @@
 
 (define-extern reset-arena-trainer-globals (function none))
 (defmethod start-run! ((this speedrun-info))
+  ;; A reset/retry closes the previous unfinished attempt before streaming.
+  (replay-record-stop! #f)
   ;; turn on speedrun verification display
   (true! (-> this display-run-info?))
   ;; reset has-started? flag so we can flip it back to #t when jak touches ground/out of blackout
@@ -2483,6 +2491,8 @@
 
 (defun mark-speedrun-started ()
   (true! (-> *speedrun-info* has-started?))
+  (when (il-speedrun?)
+    (replay-record-start!))
   (none))
 
 (defmethod update! ((this speedrun-info))
@@ -2509,6 +2519,7 @@
         (lambda ()
           (suspend)
           (reset! *autosplit-info-jak3*))))
+    (replay-record-frame!)
     ;; Update auto-splitter struct
     (update! *autosplit-info-jak3*)
     ;; see if we should stop drawing the run info (when you finish arena training, but also make sure at least 10s have passed)
@@ -2607,6 +2618,7 @@
 ;; Speedrun Menu
 
 (defmethod deactivate ((this speedrun-manager))
+  (replay-record-stop! #f)
   (set! *speedrun-manager* (the (pointer speedrun-manager) #f))
   (call-parent-method this))
 
@@ -2664,7 +2676,10 @@
             (send-event (ppointer->process (-> self popup-menu)) 'close-menu)
             (start-run! *speedrun-info*)
             )
-           (((speedrun-menu-command exit)) (set-master-mode 'game) (send-event (ppointer->process (-> self popup-menu)) 'close-menu))
+           (((speedrun-menu-command exit))
+            (replay-record-stop! #f)
+            (set-master-mode 'game)
+            (send-event (ppointer->process (-> self popup-menu)) 'close-menu))
            (else (format 0 "nyi: invoke ~D~%" (-> block param 0)))))))
   :trans
     (behavior ()

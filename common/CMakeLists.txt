@@ -59,6 +59,7 @@ add_library(common
         repl/nrepl/ReplClient.cpp
         repl/nrepl/ReplServer.cpp
         repl/repl_wrapper.cpp
+        replay/replay_format.cpp
         serialization/subtitles/subtitles_v1.cpp
         serialization/subtitles/subtitles_v2.cpp
         serialization/subtitles/subtitles.cpp

@@ -13,6 +13,7 @@ add_executable(goalc-test
         ${CMAKE_CURRENT_LIST_DIR}/test_emitter_avx.cpp
         ${CMAKE_CURRENT_LIST_DIR}/test_common_util.cpp
         ${CMAKE_CURRENT_LIST_DIR}/test_pretty_print.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/test_replay_format.cpp
         ${CMAKE_CURRENT_LIST_DIR}/test_math.cpp
         ${CMAKE_CURRENT_LIST_DIR}/test_zstd.cpp
         ${CMAKE_CURRENT_LIST_DIR}/test_zydis.cpp

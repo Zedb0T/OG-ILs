@@ -1,6 +1,8 @@
 ;;-*-Lisp-*-
 (in-package goal)
 
+(define-extern replay-record-stop! (function symbol none))
+
 ;; name: task-control.gc
 ;; name in dgo: task-control
 ;; dgos: GAME
@@ -3350,6 +3352,9 @@
     (disable *screen-filter*)
     )
   :code (behavior ((arg0 resetter-params))
+    ;; Save an IL's partial recording before failure handling can unload art or
+    ;; replace the target. This is a no-op when no replay recording is active.
+    (replay-record-stop! #f)
     (while (not (-> self allow-fail))
       (suspend)
       )
@@ -3377,6 +3382,7 @@
   :event task-manager-event-handler
   :exit (-> (method-of-type task-manager fail) exit)
   :code (behavior ((arg0 symbol))
+    (replay-record-stop! #f)
     (send-event (handle->process (-> self arrow)) 'die)
     (countdown (s5-0 4)
       (send-event (handle->process (-> self hud s5-0)) 'hide-and-die)

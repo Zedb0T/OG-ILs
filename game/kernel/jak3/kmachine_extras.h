@@ -20,8 +20,8 @@ void callback_fetch_external_race_times(bool success,
                                         const std::string& cache_id,
                                         std::optional<std::string> result);
 void callback_fetch_external_warp_mission_times(bool success,
-                                        const std::string& cache_id,
-                                        std::optional<std::string> result);
+                                                const std::string& cache_id,
+                                                std::optional<std::string> result);
 void callback_fetch_external_highscores(bool success,
                                         const std::string& cache_id,
                                         std::optional<std::string> result);
@@ -34,8 +34,14 @@ void pc_get_external_speedrun_time(u32 speedrun_id_ptr,
                                    u32 name_dest_ptr,
                                    u32 time_dest_ptr);
 void pc_get_external_race_time(u32 race_id_ptr, s32 index, u32 name_dest_ptr, u32 time_dest_ptr);
-void pc_get_external_any_mission_time(u32 mission_id_ptr, s32 index, u32 name_dest_ptr, u32 time_dest_ptr);
-void pc_get_external_warp_mission_time(u32 mission_id_ptr, s32 index, u32 name_dest_ptr, u32 time_dest_ptr);
+void pc_get_external_any_mission_time(u32 mission_id_ptr,
+                                      s32 index,
+                                      u32 name_dest_ptr,
+                                      u32 time_dest_ptr);
+void pc_get_external_warp_mission_time(u32 mission_id_ptr,
+                                       s32 index,
+                                       u32 name_dest_ptr,
+                                       u32 time_dest_ptr);
 void pc_get_external_highscore(u32 highscore_id_ptr,
                                s32 index,
                                u32 name_dest_ptr,
@@ -60,6 +66,16 @@ void pc_sr_mode_get_custom_category_name(s32 entry_index, u32 name_str_ptr);
 void pc_sr_mode_get_custom_category_continue_point(s32 entry_index, u32 name_str_ptr);
 void pc_sr_mode_init_custom_category_info(s32 entry_index, u32 speedrun_custom_category_ptr);
 void pc_sr_mode_dump_new_custom_category(u32 speedrun_custom_category_ptr);
+
+// Bounded local IL replay recording. Recording storage is owned by C++ and
+// allocated once; these functions are intentionally independent of playback
+// and networking.
+u64 pc_replay_recording_start(s64 start_ticks, u32 category_ptr);
+u64 pc_replay_recording_sample(s64 now_ticks, u32 position_ptr, u32 rotation_ptr, u32 velocity_ptr);
+u64 pc_replay_recording_sample_metadata(u32 state_ptr, u32 animation_ptr, u32 status);
+u64 pc_replay_recording_finish(u32 completed_symbol);
+u64 pc_replay_recording_active();
+s64 pc_replay_recording_count();
 
 struct DiscordInfo {
   float orb_count;          // float

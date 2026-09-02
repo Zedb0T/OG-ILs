@@ -506,6 +506,18 @@ void InitMachine_PCPort() {
                               (void*)kmachine_extras::pc_sr_mode_init_custom_category_info);
   make_function_symbol_from_c("pc-sr-mode-dump-new-custom-category",
                               (void*)kmachine_extras::pc_sr_mode_dump_new_custom_category);
+  make_function_symbol_from_c("pc-replay-recording-start",
+                              (void*)kmachine_extras::pc_replay_recording_start);
+  make_function_symbol_from_c("pc-replay-recording-sample",
+                              (void*)kmachine_extras::pc_replay_recording_sample);
+  make_function_symbol_from_c("pc-replay-recording-sample-metadata",
+                              (void*)kmachine_extras::pc_replay_recording_sample_metadata);
+  make_function_symbol_from_c("pc-replay-recording-finish",
+                              (void*)kmachine_extras::pc_replay_recording_finish);
+  make_function_symbol_from_c("pc-replay-recording-active?",
+                              (void*)kmachine_extras::pc_replay_recording_active);
+  make_function_symbol_from_c("pc-replay-recording-count",
+                              (void*)kmachine_extras::pc_replay_recording_count);
 
   // setup string constants
   auto user_dir_path = file_util::get_user_config_dir();
