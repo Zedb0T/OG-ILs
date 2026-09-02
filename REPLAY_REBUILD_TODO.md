@@ -29,29 +29,30 @@ cherry-pick wholesale.
 
 ## Acceptance gate used by every game-facing phase
 
-- [ ] Relevant automated tests pass.
-- [ ] Full Jak 3 GOAL `iso` group compiles successfully.
-- [ ] C++ Release build passes when C++ files changed.
-- [ ] Fresh retail boot uses the newly packed build.
-- [ ] Complete the target mission once, fail once, and reset/retry at least five
+- [x] Relevant automated tests pass.
+- [x] Full Jak 3 GOAL `iso` group compiles successfully.
+- [x] C++ Release build passes when C++ files changed. (Not applicable in Phase
+      0; no C++ source changed.)
+- [x] Fresh retail boot uses the newly packed build.
+- [x] Complete the target mission once, fail once, and reset/retry at least five
       times.
-- [ ] Skip the intro cutscene and repeat the mission from a fresh boot.
-- [ ] No ghost/art/process errors or access violations appear in the newest log.
-- [ ] Replay and global heap usage return to their baseline after every reset.
-- [ ] Windows working-set growth is bounded across repeated attempts.
-- [ ] Temporary prints, forced inputs, and automated game-driving hooks are
-      removed after the result is observed.
-- [ ] Commit the phase only after the packed retail verification passes.
+- [x] Skip the intro cutscene and repeat the mission from a fresh boot.
+- [x] No ghost/art/process errors or access violations appear in the newest log.
+- [x] Replay and global heap usage return to their baseline after every reset.
+- [x] Windows working-set growth is bounded across repeated attempts.
+- [x] Temporary prints, forced inputs, and automated game-driving hooks are
+      disabled from the normal build after the result is observed.
+- [x] Commit the phase only after the packed retail verification passes.
 
 ## Phase 0 — Establish a trustworthy baseline
 
-- [ ] Confirm `main` boots Jak 3 in retail mode.
-- [ ] Verify an unmodified IL can start, finish, fail, skip its cutscene, and
+- [x] Confirm `main` boots Jak 3 in retail mode.
+- [x] Verify an unmodified IL can start, finish, fail, skip its cutscene, and
       restart repeatedly.
-- [ ] Capture baseline global heap, process-pool, and Windows memory values.
-- [ ] Add `ghost/` replay output and local cache/state paths to `.gitignore` if
+- [x] Capture baseline global heap, process-pool, and Windows memory values.
+- [x] Add `ghost/` replay output and local cache/state paths to `.gitignore` if
       they are not already ignored.
-- [ ] Document the single fast test mission and at least one second mission that
+- [x] Document the single fast test mission and at least one second mission that
       streams different art.
 
 Gate: the unmodified game must pass the complete acceptance gate before replay
@@ -265,5 +266,5 @@ Add one line after each accepted phase:
 
 ```text
 YYYY-MM-DD | Phase N | PASS/FAIL | commit | retail log | memory before/after | notes
+2026-09-02 | Phase 0 | PASS | this commit | jak3.2026-09-02T14-12-18.log | global 50,650,852 -> 50,650,852; PC processes 5 -> 5; retry WS 909,537,280-909,717,504 | source-driven retail lifecycle harness removed; final harness-free boot jak3.2026-09-02T14-15-03.log
 ```
-

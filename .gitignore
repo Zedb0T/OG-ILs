@@ -54,6 +54,9 @@ screenshots/
 game_config/*
 imgui.ini
 
+# local replay recordings and caches
+/ghost/
+
 # website stuff
 node_modules/
 

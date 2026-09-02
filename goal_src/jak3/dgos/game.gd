@@ -351,6 +351,7 @@
   "menu.o"
   "popup-menu.o" ;; added
   "speedruns.o" ;; added
+  ;; "phase0-smoke-test.o" ;; opt-in Phase 0 lifecycle reference harness
   "drawable.o"
   "drawable-group.o"
   "drawable-inline-array.o"

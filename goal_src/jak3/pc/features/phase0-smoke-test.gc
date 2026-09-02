@@ -1,0 +1,214 @@
+;; Phase 0 retail lifecycle reference harness.
+;;
+;; This file is intentionally excluded from normal builds. To run it, uncomment
+;; phase0-smoke-test.o in goal_src/jak3/dgos/game.gd, rebuild the iso group, and
+;; boot the packed retail game. Comment the object out again after testing.
+(in-package goal)
+
+(define *phase0-smoke-started?* #f)
+
+(defun phase0-global-used ()
+  (&- (-> global current) (the-as uint (-> global base))))
+
+(defun phase0-snapshot ((label object))
+  (format 0
+          "PHASE0: SAMPLE ~S global=~D active=~D pc=~D~%"
+          label
+          (phase0-global-used)
+          (process-count *active-pool*)
+          (process-count *pc-pool*))
+  (none))
+
+(defun phase0-retry-snapshot ((cycle int))
+  (format 0
+          "PHASE0: SAMPLE retry-~D global=~D active=~D pc=~D~%"
+          cycle
+          (phase0-global-used)
+          (process-count *active-pool*)
+          (process-count *pc-pool*))
+  (none))
+
+(defun phase0-wait-for-process ((name string) (timeout-seconds int))
+  (let ((deadline (+ (get-current-time) (seconds timeout-seconds)))
+        (found (the-as process #f)))
+    (while (and (not found) (< (get-current-time) deadline))
+      (set! found (process-by-name name *active-pool*))
+      (when (not found)
+        (suspend)))
+    found))
+
+(defun phase0-wait-for-target ((timeout-seconds int))
+  (let ((deadline (+ (get-current-time) (seconds timeout-seconds))))
+    (while (and (not *target*) (< (get-current-time) deadline))
+      (suspend))
+    (the-as symbol (not (not *target*)))))
+
+(defun phase0-start-mission ((category speedrun-category) (manager-name string))
+  (set-category! *speedrun-info* category)
+  (start-run! *speedrun-info*)
+  (format 0 "PHASE0: START category=~S~%" (enum->string speedrun-category category))
+  (let ((deadline (+ (get-current-time) (seconds 30))))
+    (while (and (not (-> *speedrun-info* has-started?))
+                (< (get-current-time) deadline))
+      (suspend)))
+  (if (and (-> *speedrun-info* has-started?)
+           (phase0-wait-for-target 30)
+           (phase0-wait-for-process manager-name 30))
+      #t
+      (begin
+        (format 0 "PHASE0: ERROR mission did not become ready: ~S~%" manager-name)
+        #f)))
+
+(defun phase0-run! ()
+  (when (not *phase0-smoke-started?*)
+    (set! *phase0-smoke-started?* #t)
+    (process-spawn-function process
+      :name "phase0-smoke-test"
+      :to *pc-pool*
+      :stack-size #x10000
+      (lambda :behavior process ()
+        (stack-size-set! (-> self main-thread) 2048)
+        (let ((failed? #f)
+              (baseline-global 0)
+              (baseline-active 0)
+              (baseline-pc 0)
+              (max-global-growth 0)
+              (mission-name "wascity-bbush-get-to-18-resolution"))
+          (format 0 "PHASE0: BEGIN source-driven retail lifecycle test~%")
+
+          ;; Abort the real fresh-boot scene before starting an IL.
+          (let ((deadline (+ (get-current-time) (seconds 30))))
+            (while (and (not *scene-player*) (< (get-current-time) deadline))
+              (suspend)))
+          (cond
+            (*scene-player*
+             (send-event (ppointer->process *scene-player*) 'abort)
+             (format 0 "PHASE0: PASS fresh-boot-cutscene-abort~%")
+             (let ((deadline (+ (get-current-time) (seconds 10))))
+               (while (and *scene-player* (< (get-current-time) deadline))
+                 (suspend)))
+             (dotimes (settle 180)
+               (suspend)))
+            (else
+             (set! failed? #t)
+             (format 0 "PHASE0: ERROR fresh-boot scene-player unavailable~%")))
+
+          (let ((deadline (+ (get-current-time) (seconds 30))))
+            (while (and (not *speedrun-manager*) (< (get-current-time) deadline))
+              (suspend)))
+          (cond
+            ((not *speedrun-manager*)
+             (set! failed? #t)
+             (format 0 "PHASE0: ERROR speedrun manager unavailable~%"))
+            (else
+             ;; Complete a mission once.
+             (let ((manager
+                     (if (phase0-start-mission
+                           (speedrun-category wascity-bbush-get-to-18)
+                           mission-name)
+                         (process-by-name mission-name *active-pool*)
+                         (the-as process #f))))
+               (cond
+                 (manager
+                  (send-event manager 'complete)
+                  (format 0 "PHASE0: EVENT complete~%")
+                  (let ((deadline (+ (get-current-time) (seconds 15))))
+                    (while (and
+                             (not (task-resolution-closed?
+                                    (game-task wascity-bbush-get-to-18)))
+                             (< (get-current-time) deadline))
+                      (suspend)))
+                  (if (task-resolution-closed? (game-task wascity-bbush-get-to-18))
+                      (format 0 "PHASE0: PASS completed-attempt~%")
+                      (begin
+                        (set! failed? #t)
+                        (format 0 "PHASE0: ERROR completion did not close task~%"))))
+                 (else
+                  (set! failed? #t)
+                  (format 0 "PHASE0: ERROR fast mission manager unavailable~%"))))
+
+             ;; Start the same mission again and drive its failure path.
+             (when (phase0-start-mission
+                     (speedrun-category wascity-bbush-get-to-18)
+                     mission-name)
+               (let ((manager (process-by-name mission-name *active-pool*)))
+                 (send-event manager 'fail)
+                 (format 0 "PHASE0: EVENT fail~%")
+                 (if (and (-> manager next-state)
+                          (= (-> manager next-state name) 'fail))
+                     (format 0 "PHASE0: PASS failed-attempt-transition~%")
+                     (begin
+                       (set! failed? #t)
+                       (format 0 "PHASE0: ERROR failure event did not select fail state~%")))
+                 (dotimes (settle 5)
+                   (suspend))))
+
+             ;; Establish a stable baseline, then repeatedly restart the mission.
+             (phase0-snapshot "before-retry-loop")
+             (set! baseline-global (phase0-global-used))
+             (set! baseline-active (process-count *active-pool*))
+             (set! baseline-pc (process-count *pc-pool*))
+
+             (dotimes (cycle 5)
+               (cond
+                 ((phase0-start-mission
+                    (speedrun-category wascity-bbush-get-to-18)
+                    mission-name)
+                  (dotimes (settle 30)
+                    (suspend))
+                  (phase0-retry-snapshot (+ cycle 1))
+                  (set! max-global-growth
+                        (max max-global-growth
+                             (- (phase0-global-used) baseline-global))))
+                 (else
+                  (set! failed? #t))))
+
+             (when (!= (process-count *pc-pool*) baseline-pc)
+               (set! failed? #t)
+               (format 0
+                       "PHASE0: ERROR pc process growth baseline=~D current=~D~%"
+                       baseline-pc
+                       (process-count *pc-pool*)))
+             (when (> (process-count *active-pool*) (+ baseline-active 8))
+               (set! failed? #t)
+               (format 0
+                       "PHASE0: ERROR active process growth baseline=~D current=~D~%"
+                       baseline-active
+                       (process-count *active-pool*)))
+             (when (> max-global-growth #x100000)
+               (set! failed? #t)
+               (format 0
+                       "PHASE0: ERROR global growth exceeded limit: ~D~%"
+                       max-global-growth))
+
+             ;; Switch to a different-art mission and complete it.
+             (let ((second-name "desert-bbush-get-to-17-resolution"))
+               (cond
+                 ((phase0-start-mission
+                    (speedrun-category desert-bbush-get-to-17)
+                    second-name)
+                  (format 0 "PHASE0: PASS different-art-mission-ready~%")
+                  (phase0-snapshot "settled-final")
+                  (format 0 "PHASE0: MAX global-growth=~D~%" max-global-growth)
+                  (send-event (process-by-name second-name *active-pool*) 'complete)
+                  (format 0 "PHASE0: EVENT second-mission-complete~%")
+                  (let ((deadline (+ (get-current-time) (seconds 15))))
+                    (while (and
+                             (not (task-resolution-closed?
+                                    (game-task desert-bbush-get-to-17)))
+                             (< (get-current-time) deadline))
+                      (suspend)))
+                  (if (task-resolution-closed? (game-task desert-bbush-get-to-17))
+                      (format 0 "PHASE0: PASS different-art-completion~%")
+                      (begin
+                        (set! failed? #t)
+                        (format 0 "PHASE0: ERROR different-art completion failed~%"))))
+                 (else
+                  (set! failed? #t))))))
+
+          (if failed?
+              (format 0 "PHASE0: RESULT FAIL~%")
+              (format 0 "PHASE0: RESULT PASS~%"))))))
+  (none))
+
+(phase0-run!)
