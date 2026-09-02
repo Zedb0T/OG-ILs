@@ -545,48 +545,20 @@
           (+! (-> self root trans y) (-> self offset y))
           (+! (-> self root trans z) (-> self offset z))
           (vector-copy! (the-as vector (-> self root quat)) (the-as vector (-> s quat)))
-          ;; resolve the recorded anim index against OUR (current, valid) art-group,
-          ;; then scrub the base channel to that anim + frame. set the group only when
-          ;; it changes; otherwise just move frame-num and let ja-post re-pose.
+          ;; A ghost must never retain an animation supplied by a mission, task,
+          ;; dark/light-Jak transformation, or replay art-group. Those groups are
+          ;; streamed and can be recycled while this persistent process exists.
+          ;; jakb-walk-ja belongs to the permanent base Jak group, so loop it for
+          ;; presentation while replay position and rotation remain exact.
           (when (and (nonzero? (-> self skel))
-                     (nonzero? (-> self draw)))
-            (let ((anim (the-as art-joint-anim #f))
-                  (replay-anim? #f))
-              (when (and (>= (-> s anim-idx) 0)
-                         (< (-> s anim-idx) (-> self draw art-group length)))
-                (let ((candidate (the-as art-joint-anim
-                                   (-> self draw art-group data (-> s anim-idx)))))
-                  ;; Task DGOs can unlink mission-only animations while a replay
-                  ;; is active. Never leave a channel pointing at the unlinked
-                  ;; element: evaluate-joint-control treats that as a fatal art
-                  ;; error on the following pose.
-                  (when (and candidate
-                             (nonzero? candidate)
-                             (= (-> candidate type) art-joint-anim))
-                    (set! anim candidate)
-                    (set! replay-anim? #t))))
-              ;; Jak's live base channel is maintained by the game across art
-              ;; streaming transitions, so it is the safe visual fallback when
-              ;; a recorded mission animation is no longer loaded.
-              (when (and (not anim)
-                         *target*
-                         (nonzero? (-> *target* skel))
-                         (> (-> *target* skel active-channels) 0))
-                (let ((candidate (-> *target* skel root-channel 0 frame-group)))
-                  (when (and candidate
-                             (nonzero? candidate)
-                             (= (-> candidate type) art-joint-anim))
-                    (set! anim candidate))))
-              (when anim
-                (when (!= (ja-group) anim)
-                  (ja-channel-set! 1)
-                  (joint-control-channel-group-eval! (-> self skel root-channel 0) anim num-func-identity))
-                ;; A live fallback uses Jak's own frame. Replay animations retain
-                ;; the recorded frame so normal ghost playback is unchanged.
-                (set! (-> self skel root-channel 0 frame-num)
-                      (if replay-anim?
-                          (-> s anim-frame)
-                          (-> *target* skel root-channel 0 frame-num))))))
+                     (> (-> self skel active-channels) 0))
+            (let ((anim (the-as art-joint-anim jakb-walk-ja)))
+              (when (!= (ja-group) anim)
+                (ja-channel-set! 1)
+                (joint-control-channel-group-eval! (-> self skel root-channel 0) anim num-func-identity))
+              (set! (-> self skel root-channel 0 frame-num)
+                    (the float
+                      (mod i (max 1 (+ (the int (-> anim frames num-frames)) -1)))))))
           ;; Hold only until the live attempt has crossed its initial control
           ;; release. The release flag is one-way for this run, so later mission
           ;; state changes can never pause an already-moving replay.
@@ -685,6 +657,16 @@
   ;; is only the bootstrap geometry; normal gameplay swaps it to the Jak 2,
   ;; classic, or Jak 3 body selected by target-skel-group.
   (initialize-skeleton self (target-skel-group) (the-as pair 0))
+  ;; Replace the initializer's channel immediately, before this process can be
+  ;; drawn. The base walk animation is permanent; a current target animation may
+  ;; come from a task/transformation DGO that can unload during this attempt.
+  (when (and (nonzero? (-> self skel))
+             (> (-> self skel active-channels) 0))
+    (ja-channel-set! 1)
+    (joint-control-channel-group-eval!
+      (-> self skel root-channel 0)
+      (the-as art-joint-anim jakb-walk-ja)
+      num-func-identity))
   ;; The cloth engine has only 32 slots. Keep the Jak 3 body mesh, but do not
   ;; submit cloth simulations for 33 ghosts plus the real player.
   (set! (-> self draw cloth-instances) (the-as (array cloth-system) #f))
