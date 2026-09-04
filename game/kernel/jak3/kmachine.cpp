@@ -512,12 +512,28 @@ void InitMachine_PCPort() {
                               (void*)kmachine_extras::pc_replay_recording_sample);
   make_function_symbol_from_c("pc-replay-recording-sample-metadata",
                               (void*)kmachine_extras::pc_replay_recording_sample_metadata);
+  make_function_symbol_from_c("pc-replay-recording-sample-extra",
+                              (void*)kmachine_extras::pc_replay_recording_sample_extra);
+  make_function_symbol_from_c("pc-replay-recording-sample-extra-animation",
+                              (void*)kmachine_extras::pc_replay_recording_sample_extra_animation);
   make_function_symbol_from_c("pc-replay-recording-finish",
                               (void*)kmachine_extras::pc_replay_recording_finish);
   make_function_symbol_from_c("pc-replay-recording-active?",
                               (void*)kmachine_extras::pc_replay_recording_active);
   make_function_symbol_from_c("pc-replay-recording-count",
                               (void*)kmachine_extras::pc_replay_recording_count);
+  make_function_symbol_from_c("pc-replay-playback-start",
+                              (void*)kmachine_extras::pc_replay_playback_start);
+  make_function_symbol_from_c("pc-replay-playback-sample-transform",
+                              (void*)kmachine_extras::pc_replay_playback_sample_transform);
+  make_function_symbol_from_c("pc-replay-playback-sample-metadata",
+                              (void*)kmachine_extras::pc_replay_playback_sample_metadata);
+  make_function_symbol_from_c("pc-replay-playback-sample-extra-transform",
+                              (void*)kmachine_extras::pc_replay_playback_sample_extra_transform);
+  make_function_symbol_from_c("pc-replay-playback-sample-extra-metadata",
+                              (void*)kmachine_extras::pc_replay_playback_sample_extra_metadata);
+  make_function_symbol_from_c("pc-replay-playback-stop",
+                              (void*)kmachine_extras::pc_replay_playback_stop);
 
   // setup string constants
   auto user_dir_path = file_util::get_user_config_dir();

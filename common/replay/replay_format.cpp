@@ -105,14 +105,29 @@ void validate_file(const File& replay) {
     for (const auto component : sample.velocity_meters) {
       require(std::isfinite(component), "velocity contains a non-finite number");
     }
+    require(std::isfinite(sample.animation_frame), "animation frame is non-finite");
+    for (const auto component : sample.extra_position_meters) {
+      require(std::isfinite(component), "extra position contains a non-finite number");
+    }
+    for (const auto component : sample.extra_rotation) {
+      require(std::isfinite(component), "extra rotation contains a non-finite number");
+    }
+    for (const auto component : sample.extra_scale) {
+      require(std::isfinite(component), "extra scale contains a non-finite number");
+    }
+    require(std::isfinite(sample.extra_animation_frame),
+            "extra animation frame is non-finite");
     require(sample.state[0] != '\0', "sample state is empty");
   }
 }
 
 json sample_to_json(const Sample& sample) {
   return json::array({sample.time_seconds, sample.position_meters, sample.rotation,
-                      sample.velocity_meters, sample.status, bounded_string(sample.state),
-                      bounded_string(sample.animation)});
+                      sample.velocity_meters, sample.status, sample.animation_frame,
+                      bounded_string(sample.state), bounded_string(sample.animation),
+                      bounded_string(sample.extra_art_group), sample.extra_position_meters,
+                      sample.extra_rotation, sample.extra_scale, sample.extra_animation_frame,
+                      bounded_string(sample.extra_animation)});
 }
 
 void replace_file(const fs::path& source, const fs::path& destination) {
@@ -145,7 +160,9 @@ std::string serialize(const File& replay) {
                {"sample_count", replay.samples.size()},
                {"units", "meters"},
                {"sample_keys",
-                {"time", "position", "rotation", "velocity", "status", "state", "animation"}}};
+                {"time", "position", "rotation", "velocity", "status", "animation_frame",
+                 "state", "animation", "extra_art_group", "extra_position", "extra_rotation",
+                 "extra_scale", "extra_animation_frame", "extra_animation"}}};
   auto& samples = root["samples"] = json::array();
   for (const auto& sample : replay.samples) {
     samples.push_back(sample_to_json(sample));
@@ -167,8 +184,9 @@ File parse(std::string_view contents) {
   try {
     require(root.is_object(), "replay root is not an object");
     require(root.at("schema") == "opengoal-replay", "unsupported replay schema");
-    require(root.at("version").get<std::uint32_t>() == kSchemaVersion,
-            "unsupported replay version");
+    const auto version = root.at("version").get<std::uint32_t>();
+    // Keep phase 1/2 PBs playable; v3 adds the optional companion drawable.
+    require(version >= 1 && version <= kSchemaVersion, "unsupported replay version");
     require(root.at("units") == "meters", "unsupported replay units");
 
     File replay;
@@ -187,17 +205,32 @@ File parse(std::string_view contents) {
     replay.samples.reserve(declared_count);
 
     for (const auto& encoded : samples) {
-      require(encoded.is_array() && encoded.size() == 7, "malformed replay sample");
+      const auto expected_size = version == 1 ? 7u : (version == 2 ? 8u : 14u);
+      require(encoded.is_array() && encoded.size() == expected_size, "malformed replay sample");
       Sample sample;
       sample.time_seconds = encoded.at(0).get<float>();
       sample.position_meters = parse_float_array<3>(encoded.at(1), "position");
       sample.rotation = parse_float_array<4>(encoded.at(2), "rotation");
       sample.velocity_meters = parse_float_array<3>(encoded.at(3), "velocity");
       sample.status = encoded.at(4).get<std::uint32_t>();
-      const auto state = encoded.at(5).get<std::string>();
-      const auto animation = encoded.at(6).get<std::string>();
+      const auto metadata_offset = version == 1 ? 0u : 1u;
+      if (version >= 2) {
+        sample.animation_frame = encoded.at(5).get<float>();
+      }
+      const auto state = encoded.at(5 + metadata_offset).get<std::string>();
+      const auto animation = encoded.at(6 + metadata_offset).get<std::string>();
       set_bounded_string(sample.state, state, "state", true);
       set_bounded_string(sample.animation, animation, "animation", true);
+      if (version >= 3) {
+        const auto extra_art_group = encoded.at(8).get<std::string>();
+        sample.extra_position_meters = parse_float_array<3>(encoded.at(9), "extra position");
+        sample.extra_rotation = parse_float_array<4>(encoded.at(10), "extra rotation");
+        sample.extra_scale = parse_float_array<4>(encoded.at(11), "extra scale");
+        sample.extra_animation_frame = encoded.at(12).get<float>();
+        const auto extra_animation = encoded.at(13).get<std::string>();
+        set_bounded_string(sample.extra_art_group, extra_art_group, "extra art group", true);
+        set_bounded_string(sample.extra_animation, extra_animation, "extra animation", true);
+      }
       replay.samples.push_back(sample);
     }
     validate_file(replay);
@@ -261,6 +294,7 @@ bool Recorder::add_sample(std::int64_t now_ticks,
                           const float* velocity_game_units,
                           std::string_view state,
                           std::string_view animation,
+                          float animation_frame,
                           std::uint32_t status) {
   if (!m_active || !position_game_units || !rotation || !velocity_game_units ||
       now_ticks < m_start_ticks) {
@@ -285,6 +319,7 @@ bool Recorder::add_sample(std::int64_t now_ticks,
   }
   std::copy_n(rotation, sample.rotation.size(), sample.rotation.begin());
   sample.status = status;
+  sample.animation_frame = animation_frame;
   set_bounded_string(sample.state, state.empty() ? "none" : state, "state", false);
   set_bounded_string(sample.animation, animation, "animation", false);
   return true;
@@ -292,14 +327,49 @@ bool Recorder::add_sample(std::int64_t now_ticks,
 
 bool Recorder::update_last_sample_metadata(std::string_view state,
                                            std::string_view animation,
+                                           float animation_frame,
                                            std::uint32_t status) {
   if (!m_active || m_count == 0) {
     return false;
   }
   auto& sample = m_samples[m_count - 1];
   sample.status = status;
+  sample.animation_frame = animation_frame;
   set_bounded_string(sample.state, state.empty() ? "none" : state, "state", false);
   set_bounded_string(sample.animation, animation, "animation", false);
+  return true;
+}
+
+bool Recorder::update_last_sample_extra(std::string_view art_group,
+                                        const float* position_game_units,
+                                        const float* rotation,
+                                        const float* scale,
+                                        std::string_view animation,
+                                        float animation_frame) {
+  if (!m_active || m_count == 0 || art_group.empty() || !position_game_units || !rotation ||
+      !scale || !std::isfinite(animation_frame)) {
+    return false;
+  }
+  auto& sample = m_samples[m_count - 1];
+  set_bounded_string(sample.extra_art_group, art_group, "extra art group", false);
+  set_bounded_string(sample.extra_animation, animation, "extra animation", false);
+  for (std::size_t i = 0; i < 3; ++i) {
+    sample.extra_position_meters[i] = position_game_units[i] / kGameUnitsPerMeter;
+  }
+  std::copy_n(rotation, sample.extra_rotation.size(), sample.extra_rotation.begin());
+  std::copy_n(scale, sample.extra_scale.size(), sample.extra_scale.begin());
+  sample.extra_animation_frame = animation_frame;
+  return true;
+}
+
+bool Recorder::update_last_sample_extra_animation(std::string_view animation, float animation_frame) {
+  if (!m_active || m_count == 0 || m_samples[m_count - 1].extra_art_group[0] == '\0' ||
+      !std::isfinite(animation_frame)) {
+    return false;
+  }
+  auto& sample = m_samples[m_count - 1];
+  set_bounded_string(sample.extra_animation, animation, "extra animation", false);
+  sample.extra_animation_frame = animation_frame;
   return true;
 }
 

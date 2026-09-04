@@ -12,7 +12,7 @@
 
 (define-extern *pc-dead-pool* dead-pool)
 
-(define-extern replay-record-start! (function none))
+(define-extern replay-record-start! (function time-frame none))
 (define-extern replay-record-frame! (function none))
 (define-extern replay-record-stop! (function symbol none))
 
@@ -1007,11 +1007,26 @@
     )
   (none))
 
+(defun il-speedrun? ()
+  (case (-> *speedrun-info* category)
+    (((speedrun-category newgame-normal) (speedrun-category newgame-heromode))
+      #f
+      )
+    (else
+      #t
+      )
+    )
+  )
+
 (defmethod start! ((this speedrun-timer))
   (true! (-> this started?))
   (false! (-> this stopped?))
   (set! (-> this start-time) (get-real-current-time))
-  (set! (-> this end-time) 0))
+  (set! (-> this end-time) 0)
+  ;; This is the canonical IL start edge used by both a menu reset and the
+  ;; mission's normal retry flow. Give replay the exact same clock origin.
+  (when (il-speedrun?)
+    (replay-record-start! (-> this start-time))))
 
 (defmethod reset! ((this speedrun-timer))
   (false! (-> this started?))
@@ -1064,17 +1079,6 @@
   (replay-record-stop! #f)
   (reset! (the-as speedrun-timer (ppointer->process (-> *speedrun-manager* 0 timer))))
   (set! (-> this category) category))
-
-(defun il-speedrun? ()
-  (case (-> *speedrun-info* category)
-    (((speedrun-category newgame-normal) (speedrun-category newgame-heromode))
-      #f
-      )
-    (else
-      #t
-      )
-    )
-  )
 
 (defmethod start-individual-level-run! ((this speedrun-info) (tsk game-task) (side-mish? symbol) (secrets game-secrets))
   (let ((end-tsk (case tsk
@@ -2491,8 +2495,6 @@
 
 (defun mark-speedrun-started ()
   (true! (-> *speedrun-info* has-started?))
-  (when (il-speedrun?)
-    (replay-record-start!))
   (none))
 
 (defmethod update! ((this speedrun-info))

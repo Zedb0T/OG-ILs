@@ -1,0 +1,575 @@
+;;-*-Lisp-*-
+(in-package goal)
+
+;; Phase 2 visual slice: render one native-owned local PB without exposing its
+;; immutable sample storage to GOAL. Recording and playback never alias.
+
+(define-extern pc-replay-playback-start (function string int))
+(define-extern pc-replay-playback-sample-transform
+  (function int vector vector symbol))
+(define-extern pc-replay-playback-sample-metadata
+  (function int string string vector symbol))
+(define-extern pc-replay-playback-sample-extra-transform
+  (function int string vector vector symbol))
+(define-extern pc-replay-playback-sample-extra-metadata
+  (function int string vector vector symbol))
+(define-extern pc-replay-playback-stop (function symbol))
+(define-extern pc-replay-recording-active? (function symbol))
+(define-extern pc-replay-recording-count (function int))
+
+(deftype replay-ghost-player (process-drawable)
+  ((idx              int32)
+   (frames           int32)
+   (sample-state     string)
+   (sample-animation string)
+   (last-animation   string)
+   (animation-info   vector :inline)
+   (animation-index  int32)
+   (sample-valid?    symbol)
+   (extra-valid?     symbol)
+   (extra-art        string)
+   (extra-animation  string)
+   (extra-trans      vector :inline)
+   (extra-quat       vector :inline)
+   (extra-scale      vector :inline)
+   (extra-info       vector :inline)
+   (runner-name      string)
+   (runner-font      font-context)
+   (runner-screen    vector4w :inline)
+   (runner-on-screen? symbol))
+  (:state-methods
+   idle))
+
+(deftype replay-ghost-extra (process-drawable)
+  ((last-animation string)
+   (animation-index int32))
+  (:state-methods
+   idle))
+
+(define *replay-ghost-enabled?* #t)
+(define ghost-render-extras? #t)
+(define *replay-ghost-animation-diagnostics-left* 0)
+
+;; Reuse one fixed-size process allocation on every attempt. This keeps the
+;; shared variable-sized process heap out of the retry lifecycle.
+(define *replay-ghost-dead-pool*
+  (new 'global 'dead-pool 1 #x20000 "*replay-ghost-dead-pool*"))
+(define *replay-ghost-extra-dead-pool*
+  (new 'global 'dead-pool 1 #x20000 "*replay-ghost-extra-dead-pool*"))
+
+(defstate idle (replay-ghost-extra)
+  :virtual #t
+  :code
+  (behavior ()
+    (until #f
+      (let ((owner
+              (the-as replay-ghost-player
+                (ppointer->process (-> self parent)))))
+        (when (and owner
+                   (-> owner extra-valid?)
+                   ghost-render-extras?)
+          (vector-copy! (-> self root trans) (-> owner extra-trans))
+          (quaternion-copy! (-> self root quat)
+                            (the-as quaternion (-> owner extra-quat)))
+          (vector-copy! (-> self root scale) (-> owner extra-scale))
+          (when (not (string= (-> owner extra-animation)
+                              (-> self last-animation)))
+            (copy-string<-string (-> self last-animation)
+                                 (-> owner extra-animation))
+            (set! (-> self animation-index)
+                  (if (and (not (string= (-> owner extra-animation) ""))
+                           (not (string= (-> owner extra-animation) "none")))
+                      (get-art-idx-by-name-method
+                        (-> self draw art-group)
+                        (-> owner extra-animation)
+                        art-joint-anim)
+                      -1)))
+          (let ((anim (the-as art-joint-anim #f))
+                (recorded? #f))
+            (when (and (>= (-> self animation-index) 0)
+                       (< (-> self animation-index)
+                          (-> self draw art-group length)))
+              (let ((animation
+                      (the-as art-joint-anim
+                        (-> self draw art-group data
+                            (-> self animation-index)))))
+                (when (and animation
+                           (nonzero? animation)
+                           (= (-> animation type) art-joint-anim)
+                           (string= (-> animation name)
+                                    (-> owner extra-animation)))
+                  (set! anim animation)
+                  (set! recorded? #t))))
+            ;; Earlier v3 PBs have valid board transforms but corrupt animation
+            ;; metadata from the old native call. Keep those PBs usable without
+            ;; borrowing the live player's board or requiring another record.
+            (when (and (not anim) (string= (-> owner extra-art) "board"))
+              (set! anim (the-as art-joint-anim board-open-ja)))
+            (when (and anim (nonzero? anim) (= (-> anim type) art-joint-anim))
+              (when (!= (ja-group) anim)
+                (ja-channel-set! 1)
+                (joint-control-channel-group-eval!
+                  (-> self skel root-channel 0)
+                  anim
+                  num-func-identity))
+              (set! (-> self skel root-channel 0 frame-num)
+                    (if recorded?
+                        (fmax 0.0 (fmin (-> owner extra-info x)
+                          (the float (- (-> anim frames num-frames) 1))))
+                        (the float (- (-> anim frames num-frames) 1))))))))
+      (suspend)))
+  :post
+  (behavior ()
+    (when (= *master-mode* 'game)
+      (let ((owner
+              (the-as replay-ghost-player
+                (ppointer->process (-> self parent)))))
+        ;; Match target-board-joint-points + board-post: the board is attached
+        ;; to Jak's animated joint 37, not an independently positioned vehicle.
+        ;; The replay's simplified pose can differ from the original blended
+        ;; pose, so the saved world transform alone can leave it beside Jak.
+        ;; Parents finish ja-post before their children run; sync-math on the
+        ;; ghost makes this the same sample's evaluated attachment matrix.
+        (when (and owner
+                   (-> owner sample-valid?)
+                   (-> owner extra-valid?)
+                   ghost-render-extras?
+                   (string= (-> owner extra-art) "board")
+                   (nonzero? (-> owner node-list))
+                   (> (-> owner node-list length) 37))
+          (matrix->transformq
+            (the-as transformq (-> self root trans))
+            (-> owner node-list data 37 bone transform))
+          ;; Only position/rotation come from the attachment joint. Restore
+          ;; this sample's recorded board scale after matrix decomposition,
+          ;; rather than replacing it with the ghost Jak's fixed unit scale.
+          (vector-copy! (-> self root scale) (-> owner extra-scale))))
+      (ja-post))))
+
+(defmethod relocate ((this replay-ghost-extra) (diff int))
+  (when (nonzero? (-> this last-animation))
+    (&+! (-> this last-animation) diff))
+  (call-parent-method this diff))
+
+(defbehavior replay-ghost-extra-init-by-other replay-ghost-extra
+  ((group skeleton-group))
+  (stack-size-set! (-> self main-thread) 1024)
+  (set! (-> self last-animation)
+        (new 'process 'string 64 (the-as string #f)))
+  (clear (-> self last-animation))
+  (set! (-> self animation-index) -1)
+  (set! (-> self root) (new 'process 'trsqv))
+  (set-vector! (-> self root scale) 1.0 1.0 1.0 1.0)
+  (quaternion-identity! (-> self root quat))
+  (set! (-> self level) (level-get-target-inside *level*))
+  (initialize-skeleton self group (the-as pair 0))
+  (set! (-> self draw cloth-instances) (the-as (array cloth-system) #f))
+  (set! (-> self draw shadow-ctrl) #f)
+  (set! (-> self draw shadow) #f)
+  (let ((nl (-> self node-list data)))
+    (set! (-> nl 0 param0)
+          (the-as (function cspace transformq none) cspace<-transformq+trans!))
+    (set! (-> nl 0 param1) (the-as basic (-> self root trans)))
+    (set! (-> nl 0 param2) (the-as basic *null-vector*)))
+  (logior! (-> self skel status) (joint-control-status sync-math))
+  (set! (-> self draw light-index) (the-as uint 30))
+  (set! (-> self draw lod-set max-lod) 0)
+  (set-vector! (the-as vector (-> self draw color-mult)) 0.3 0.7 1.35 1.0)
+  (set-vector! (the-as vector (-> self draw color-emissive)) 0.05 0.2 0.45 0.0)
+  (go-virtual idle))
+
+(defstate idle (replay-ghost-player)
+  :virtual #t
+  :trans
+  (behavior ()
+    ;; The skeleton root is at Jak's feet; put the identity just below it.
+    (set! (-> self runner-on-screen?)
+          (transform-point-qword! (-> self runner-screen) (-> self root trans)))
+    (when (-> self runner-on-screen?)
+      (set-origin! (-> self runner-font)
+                   (+ (/ (-> self runner-screen x) 16) -1792)
+                   (+ (/ (-> self runner-screen y) 16) -1837))
+      (set-depth! (-> self runner-font) (/ (-> self runner-screen z) 16))))
+  :code
+  (behavior ()
+    (until #f
+      (set! (-> self sample-valid?)
+            (and (= *master-mode* 'game)
+                 (> (-> self frames) 0)
+                 (pc-replay-playback-sample-transform
+                   (-> self idx)
+                   (-> self root trans)
+                   (the-as vector (-> self root quat)))
+                 (pc-replay-playback-sample-metadata
+                   (-> self idx)
+                   (-> self sample-state)
+                   (-> self sample-animation)
+                   (-> self animation-info))))
+      (set! (-> self extra-valid?)
+            (and (-> self sample-valid?)
+                 ghost-render-extras?
+                 (pc-replay-playback-sample-extra-transform
+                   (-> self idx)
+                   (-> self extra-art)
+                   (-> self extra-trans)
+                   (-> self extra-quat))
+                 (pc-replay-playback-sample-extra-metadata
+                   (-> self idx)
+                   (-> self extra-animation)
+                   (-> self extra-info)
+                   (-> self extra-scale))))
+      ;; The companion owns only rendering state. Replace it when the recorded
+      ;; mount art changes (for example board -> vehicle) and remove it as soon
+      ;; as the sample returns to on-foot play or the feature bool is disabled.
+      (let ((extra (process-by-name "replay-ghost-extra" *pc-pool*)))
+        (when (and extra
+                   (or (not (-> self extra-valid?))
+                       (not (string=
+                              (-> (the-as replay-ghost-extra extra)
+                                  draw art-group name)
+                              (-> self extra-art)))))
+          (deactivate extra)
+          (set! extra #f))
+        (when (and (-> self extra-valid?)
+                   (not extra))
+          ;; A drawable records the raw art-group, not its skeleton descriptor.
+          ;; Follow initialize-skeleton-by-name's skel- prefix convention.
+          (format (clear *temp-string*) "skel-~S"
+                  (if (string= (-> self extra-art) "flut-saddle")
+                      "flut"
+                      (-> self extra-art)))
+          (let ((group
+                  (the-as skeleton-group
+                    (art-group-get-by-name
+                      *level*
+                      *temp-string*
+                      (the-as (pointer level) #f)))))
+            (when (and group (nonzero? group) (= (-> group type) skeleton-group))
+              (process-spawn
+                replay-ghost-extra
+                group
+                :name "replay-ghost-extra"
+                :from *replay-ghost-extra-dead-pool*
+                :to self)))))
+      (when (-> self sample-valid?)
+        ;; Cache only the art-group index and copied name, never an animation
+        ;; pointer. The candidate is reacquired and validated from the ghost's
+        ;; currently loaded art every frame, so task-art unload cannot leave a
+        ;; dangling pointer in this persistent process.
+        (when (and (nonzero? (-> self skel))
+                   (nonzero? (-> self draw)))
+          (when (not (string= (-> self sample-animation)
+                              (-> self last-animation)))
+            (copy-string<-string
+              (-> self last-animation)
+              (-> self sample-animation))
+            (set! (-> self animation-index)
+                  (if (and (not (string= (-> self sample-animation) ""))
+                           (not (string= (-> self sample-animation) "none"))
+                           *target*
+                           (nonzero? (-> *target* draw)))
+                      (get-art-idx-by-name-method
+                        ;; Match the historical replay path: the live target's
+                        ;; art-group owns the name lookup, while the equivalent
+                        ;; index is reacquired from this drawable below.
+                        (-> *target* draw art-group)
+                        (-> self sample-animation)
+                        art-joint-anim)
+                      -1))
+            (when (> *replay-ghost-animation-diagnostics-left* 0)
+              (format 0 "replay: animation=~S state=~S idx=~D frame=~f~%"
+                      (-> self sample-animation)
+                      (-> self sample-state)
+                      (-> self animation-index)
+                      (-> self animation-info x))
+              (format 0 "replay: ghost-art=~S target-art=~S~%"
+                      (-> self draw art-group name)
+                      (-> *target* draw art-group name))
+              (-! *replay-ghost-animation-diagnostics-left* 1)))
+          (let ((anim (the-as art-joint-anim #f))
+                (replay-animation? #f))
+            (when (and (>= (-> self animation-index) 0)
+                       (< (-> self animation-index)
+                          (-> self draw art-group length)))
+              (let ((candidate
+                      (the-as art-joint-anim
+                        (-> self draw art-group data
+                            (-> self animation-index)))))
+                (when (and candidate
+                           (nonzero? candidate)
+                           (= (-> candidate type) art-joint-anim)
+                           (string= (-> candidate name)
+                                    (-> self sample-animation)))
+                  (set! anim candidate)
+                  (set! replay-animation? #t))))
+            ;; Phase-1 PB files legitimately have state but no animation name.
+            ;; Until such a PB is replaced by a v2 recording, borrow the live
+            ;; base animation only when both actors are in the same state.
+            (when (and (not anim)
+                       *target*
+                       (-> *target* next-state)
+                       (string= (-> self sample-state)
+                                (symbol->string (-> *target* next-state name)))
+                       (nonzero? (-> *target* skel))
+                       (> (-> *target* skel active-channels) 0))
+              (let ((candidate
+                      (-> *target* skel root-channel 0 frame-group)))
+                (when (and candidate
+                           (nonzero? candidate)
+                           (= (-> candidate type) art-joint-anim))
+                  (set! anim candidate))))
+            (when anim
+              (when (!= (ja-group) anim)
+                (ja-channel-set! 1)
+                (joint-control-channel-group-eval!
+                  (-> self skel root-channel 0)
+                  anim
+                  num-func-identity))
+              (set! (-> self skel root-channel 0 frame-num)
+                    (if replay-animation?
+                        (-> self animation-info x)
+                        (-> *target* skel root-channel 0 frame-num))))))
+        ;; Hold at the finish instead of visibly looping back to the start.
+        (when (< (+ (-> self idx) 1) (-> self frames))
+          (+! (-> self idx) 1)))
+      ;; Temporary manual-test overlay. Besides identifying the PB, this makes
+      ;; the native sample, name lookup, and recorded pose visible in-game.
+      (format (clear (-> self runner-name))
+              "Personal Best~%ok=~S i=~D~%a=~S~%s=~S idx=~D f=~f"
+              (-> self sample-valid?)
+              (-> self idx)
+              (-> self sample-animation)
+              (-> self sample-state)
+              (-> self animation-index)
+              (-> self animation-info x))
+      (format (-> self runner-name)
+              "~%x=~S xa=~S"
+              (-> self extra-art)
+              (-> self extra-animation))
+      (suspend)))
+  :post
+  (behavior ()
+    ;; Submit joint math in the drawable post phase, matching normal animated
+    ;; actors.  Doing this from the logic loop can leave the draw control marked
+    ;; temporary/no-draw when the renderer consumes it later in the frame.
+    ;; Never dereference an animation channel while pause/debug/progress can
+    ;; change streamed art. replay-ghost-update! retires us in those modes.
+    (when (= *master-mode* 'game)
+      (ja-post)
+      (when (and (-> self runner-on-screen?)
+                 (nonzero? (-> self runner-name)))
+        (print-game-text
+          (-> self runner-name)
+          (-> self runner-font)
+          #f
+          44
+          (bucket-id debug-no-zbuf1))))))
+
+(defmethod relocate ((this replay-ghost-player) (diff int))
+  (when (nonzero? (-> this sample-state))
+    (&+! (-> this sample-state) diff))
+  (when (nonzero? (-> this sample-animation))
+    (&+! (-> this sample-animation) diff))
+  (when (nonzero? (-> this last-animation))
+    (&+! (-> this last-animation) diff))
+  (when (nonzero? (-> this extra-art))
+    (&+! (-> this extra-art) diff))
+  (when (nonzero? (-> this extra-animation))
+    (&+! (-> this extra-animation) diff))
+  (when (nonzero? (-> this runner-name))
+    (&+! (-> this runner-name) diff))
+  (when (nonzero? (-> this runner-font))
+    (&+! (-> this runner-font) diff))
+  (call-parent-method this diff))
+
+(defbehavior replay-ghost-player-init-by-other replay-ghost-player ((frames int) (start-idx int))
+  (stack-size-set! (-> self main-thread) 1024)
+  (set! (-> self idx) (min start-idx (- frames 1)))
+  (set! (-> self frames) frames)
+  (set! (-> self sample-state)
+        (new 'process 'string 48 (the-as string #f)))
+  (set! (-> self sample-animation)
+        (new 'process 'string 64 (the-as string #f)))
+  (set! (-> self last-animation)
+        (new 'process 'string 64 (the-as string #f)))
+  (set! (-> self extra-art)
+        (new 'process 'string 64 (the-as string #f)))
+  (set! (-> self extra-animation)
+        (new 'process 'string 64 (the-as string #f)))
+  (clear (-> self sample-state))
+  (clear (-> self sample-animation))
+  (clear (-> self last-animation))
+  (clear (-> self extra-art))
+  (clear (-> self extra-animation))
+  (set-vector! (-> self extra-scale) 1.0 1.0 1.0 1.0)
+  (set! (-> self animation-index) -1)
+  (set! (-> self sample-valid?) #f)
+  (set! (-> self extra-valid?) #f)
+  (set! *replay-ghost-animation-diagnostics-left* 8)
+  (set! (-> self runner-name) (new 'process 'string 256 (the-as string #f)))
+  (format (-> self runner-name) "Personal Best")
+  (pc-encode-utf8-string (-> self runner-name) (-> self runner-name))
+  (set! (-> self runner-font)
+        (new 'process 'font-context *font-default-matrix* 0 0 0.0
+             (font-color font-color-32)
+             (font-flags shadow kerning large middle)))
+  (set-scale! (-> self runner-font) 0.35)
+  (set-width! (-> self runner-font) 220)
+  (set-height! (-> self runner-font) 30)
+
+  (set! (-> self root) (new 'process 'trsqv))
+  ;; vector-identity! is (0, 0, 0, 1), which is correct for a translation but
+  ;; collapses a trsqv scale to zero.  A drawable root needs unit XYZ scale.
+  (set-vector! (-> self root scale) 1.0 1.0 1.0 1.0)
+  (quaternion-identity! (-> self root quat))
+  (pc-replay-playback-sample-transform
+    (-> self idx)
+    (-> self root trans)
+    (the-as vector (-> self root quat)))
+  (pc-replay-playback-sample-metadata
+    (-> self idx)
+    (-> self sample-state)
+    (-> self sample-animation)
+    (-> self animation-info))
+
+  ;; Match the currently selected Jak geometry in the physical target level.
+  ;; This is the engine-tested pairing that also understands master-level art.
+  (set! (-> self level) (level-get-target-inside *level*))
+  (initialize-skeleton self (target-skel-group) (the-as pair 0))
+
+  ;; These limited renderer systems are unnecessary for one visual opponent and
+  ;; keeping them detached makes the eventual multi-ghost ceiling predictable.
+  (set! (-> self draw cloth-instances) (the-as (array cloth-system) #f))
+  (set! (-> self draw shadow-ctrl) #f)
+  (set! (-> self draw shadow) #f)
+
+  ;; Root bone 0 follows the replay's complete translation/quaternion transform.
+  (let ((nl (-> self node-list data)))
+    (set! (-> nl 0 param0)
+          (the-as (function cspace transformq none) cspace<-transformq+trans!))
+    (set! (-> nl 0 param1) (the-as basic (-> self root trans)))
+    (set! (-> nl 0 param2) (the-as basic *null-vector*)))
+
+  ;; The selected Jak skeleton can initialize with zero active animation
+  ;; channels.  ja-post treats that as temporarily non-drawable, so establish
+  ;; the permanent presentation channel unconditionally.
+  (when (nonzero? (-> self skel))
+    (ja-channel-set! 1)
+    (joint-control-channel-group-eval!
+      (-> self skel root-channel 0)
+      (the-as art-joint-anim jakb-walk-ja)
+      num-func-identity))
+  (logior! (-> self skel status) (joint-control-status sync-math))
+  (set! (-> self draw light-index) (the-as uint 30))
+  (set! (-> self draw lod-set max-lod) 0)
+  ;; Strong blue tint makes overlap and orientation errors obvious in a manual
+  ;; test while avoiding force-fade's renderer-specific visibility edge cases.
+  (set-vector! (the-as vector (-> self draw color-mult)) 0.3 0.7 1.35 1.0)
+  (set-vector! (the-as vector (-> self draw color-emissive)) 0.05 0.2 0.45 0.0)
+  (format 0 "replay: spawned local PB ghost with ~D samples~%" frames)
+  (go-virtual idle))
+
+(defun replay-ghost-stop! ()
+  "Destroy the drawable before mission art can unload, then release samples."
+  (kill-by-name "replay-ghost-safe-spawn" *pc-pool*)
+  (kill-by-type replay-ghost-extra *pc-pool*)
+  (kill-by-type replay-ghost-player *pc-pool*)
+  (pc-replay-playback-stop)
+  (none))
+
+(defun replay-ghost-spawn-now! ((category speedrun-category) (start-idx int))
+  "Load and render a local PB after the caller has established a safe frame."
+  (when (and *replay-ghost-enabled?*
+             *target*
+             (-> *target* control)
+             (nonzero? (-> *target* skel))
+             (nonzero? (-> *target* draw))
+             (= *master-mode* 'game)
+             (= category (-> *speedrun-info* category)))
+    (let ((frames
+            (pc-replay-playback-start
+              (enum->string speedrun-category category))))
+      (when (> frames 0)
+        (when (not (process-spawn
+                     replay-ghost-player
+                     frames
+                     start-idx
+                     :from *replay-ghost-dead-pool*
+                     :to *pc-pool*))
+          (format 0 "replay: could not allocate local PB ghost process~%")
+          (pc-replay-playback-stop)))))
+  (none))
+
+(defun replay-ghost-start! ()
+  "Schedule PB playback once mission-start target art is genuinely ready."
+  (replay-ghost-stop!)
+  (when (and *replay-ghost-enabled?*
+             (pc-replay-recording-active?)
+             (= *master-mode* 'game))
+    (let ((category (-> *speedrun-info* category)))
+      (process-spawn-function process
+        :name "replay-ghost-safe-spawn"
+        :to *pc-pool*
+        (lambda :behavior process ((category speedrun-category))
+          (stack-size-set! (-> self main-thread) 1024)
+          ;; Control release and task-DGO retirement can overlap for more than
+          ;; a few frames on a failure/retry. Stay pending until the replacement
+          ;; target and its art are ready, or until this attempt is cancelled.
+          (until (or (not (pc-replay-recording-active?))
+                     (!= category (-> *speedrun-info* category))
+                     (and (= *master-mode* 'game)
+                          *target*
+                          (-> *target* control)
+                          (nonzero? (-> *target* skel))
+                          (nonzero? (-> *target* draw))))
+            (suspend))
+          (when (and (pc-replay-recording-active?)
+                     (= category (-> *speedrun-info* category))
+                     (= *master-mode* 'game)
+                     *target*
+                     (-> *target* control)
+                     (nonzero? (-> *target* skel))
+                     (nonzero? (-> *target* draw)))
+            (replay-ghost-spawn-now! category (pc-replay-recording-count))))
+        category)))
+  (none))
+
+(defun replay-ghost-update! ()
+  "Keep the PB drawable within safe gameplay/art lifetime boundaries."
+  (let ((ghost (process-by-name "replay-ghost-player" *pc-pool*))
+        (pending (process-by-name "replay-ghost-safe-spawn" *pc-pool*))
+        (extra (process-by-name "replay-ghost-extra" *pc-pool*)))
+    (cond
+      ;; Pause, progress, debug menus, failure teardown, and target replacement
+      ;; are all hard lifetime boundaries for this streamed-art drawable.
+      ((or (not (pc-replay-recording-active?))
+           (!= *master-mode* 'game)
+           (not *target*)
+           (not (-> *target* control))
+           (zero? (-> *target* skel))
+           (zero? (-> *target* draw)))
+       (when (or ghost pending)
+         (replay-ghost-stop!)))
+      ;; Recover rather than leaving an inert error-state actor around if an
+      ;; art validation failure is detected before the lifecycle guard runs.
+      ((and ghost
+            (-> ghost next-state)
+            (= (-> ghost next-state name) 'process-drawable-art-error))
+       (replay-ghost-stop!)
+       (replay-ghost-start!))
+      ((and extra
+            (-> extra next-state)
+            (= (-> extra next-state name) 'process-drawable-art-error))
+       (deactivate extra))
+      ;; Resume in sync with the current attempt after returning from UI modes,
+      ;; and fill the first-retry race once replacement art becomes available.
+      ((and (not ghost) (not pending))
+       (replay-ghost-start!))))
+  (none))
+
+(defun replay-ghost-play! ()
+  "REPL helper: restart the current category's PB for a visual check."
+  (replay-ghost-stop!)
+  (when *target*
+    (replay-ghost-spawn-now! (-> *speedrun-info* category) 0))
+  (none))

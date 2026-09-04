@@ -1,6 +1,8 @@
 #include "kmachine_extras.h"
 
+#include <bit>
 #include <bitset>
+#include <cstring>
 #include <regex>
 #include <sstream>
 
@@ -23,18 +25,60 @@ namespace kmachine_extras {
 AutoSplitterBlock g_auto_splitter_block_jak3;
 
 namespace {
+constexpr float kReplayGameUnitsPerMeter = 4096.f;
 replay::Recorder g_replay_recorder;
+std::optional<replay::File> g_replay_playback;
+bool g_replay_logged_extra = false;
 
 fs::path replay_directory_for(std::string_view category) {
   return file_util::get_user_features_dir(g_game_version) / "replays" / std::string(category);
 }
 
-void save_recording(const replay::File& recording) {
+bool save_recording(const replay::File& recording) {
   const auto directory = replay_directory_for(recording.category);
   replay::atomic_save(directory / "last-attempt.ogr.json", recording);
   replay::atomic_save(
       directory / (recording.completed ? "last-completed.ogr.json" : "last-unfinished.ogr.json"),
       recording);
+
+  if (!recording.completed) {
+    return false;
+  }
+
+  const auto best_path = directory / "best-completed.ogr.json";
+  bool replace_best = true;
+  if (fs::exists(best_path)) {
+    try {
+      const auto best = replay::load(best_path);
+      replace_best = !best.completed || best.category != recording.category ||
+                     recording.duration_seconds < best.duration_seconds;
+    } catch (const std::exception& error) {
+      // A valid completed recording repairs a corrupt local PB instead of
+      // making playback permanently unavailable.
+      lg::warn("replay: replacing invalid local best: {}", error.what());
+    }
+  }
+  if (replace_best) {
+    replay::atomic_save(best_path, recording);
+  }
+  return replace_best;
+}
+
+template <std::size_t Size>
+bool copy_replay_string(u32 destination_ptr, const std::array<char, Size>& source) {
+  if (!destination_ptr) {
+    return false;
+  }
+  auto* destination = Ptr<String>(destination_ptr).c();
+  if (destination->len == 0) {
+    return false;
+  }
+  const auto source_end = std::find(source.begin(), source.end(), '\0');
+  const auto source_size = static_cast<std::size_t>(source_end - source.begin());
+  const auto copy_size = std::min(source_size, static_cast<std::size_t>(destination->len - 1));
+  std::memcpy(destination->data(), source.data(), copy_size);
+  destination->data()[copy_size] = '\0';
+  return true;
 }
 }  // namespace
 
@@ -47,6 +91,7 @@ u64 pc_replay_recording_start(s64 start_ticks, u32 category_ptr) {
     const auto category = std::string_view(category_string->data(), category_string->len);
     const auto started = g_replay_recorder.start("jak3", category, start_ticks);
     if (started) {
+      g_replay_logged_extra = false;
       lg::info("replay: started local recording for {}", category);
     } else {
       lg::warn("replay: refused invalid category '{}'", category);
@@ -71,7 +116,7 @@ u64 pc_replay_recording_sample(s64 now_ticks,
     const auto* rotation = Ptr<Vector>(rotation_ptr).c();
     const auto* velocity = Ptr<Vector>(velocity_ptr).c();
     const auto recorded = g_replay_recorder.add_sample(now_ticks, position->data, rotation->data,
-                                                       velocity->data, "none", "", 0);
+                                                       velocity->data, "none", "", 0.f, 0);
     if (recorded && g_replay_recorder.sample_count() == 1) {
       lg::info("replay: captured first local sample");
     }
@@ -83,7 +128,10 @@ u64 pc_replay_recording_sample(s64 now_ticks,
   }
 }
 
-u64 pc_replay_recording_sample_metadata(u32 state_ptr, u32 animation_ptr, u32 status) {
+u64 pc_replay_recording_sample_metadata(u32 state_ptr,
+                                        u32 animation_ptr,
+                                        u32 animation_frame_bits,
+                                        u32 status) {
   if (!state_ptr || !animation_ptr) {
     return bool_to_symbol(false);
   }
@@ -92,7 +140,9 @@ u64 pc_replay_recording_sample_metadata(u32 state_ptr, u32 animation_ptr, u32 st
     auto* animation_string = Ptr<String>(animation_ptr).c();
     const auto state = std::string_view(state_string->data(), state_string->len);
     const auto animation = std::string_view(animation_string->data(), animation_string->len);
-    return bool_to_symbol(g_replay_recorder.update_last_sample_metadata(state, animation, status));
+    const auto animation_frame = std::bit_cast<float>(animation_frame_bits);
+    return bool_to_symbol(
+        g_replay_recorder.update_last_sample_metadata(state, animation, animation_frame, status));
   } catch (const std::exception& error) {
     g_replay_recorder.cancel();
     lg::error("replay: stopped recording after metadata error: {}", error.what());
@@ -106,10 +156,14 @@ u64 pc_replay_recording_finish(u32 completed_symbol) {
   }
   try {
     const auto recording = g_replay_recorder.finish(completed_symbol != s7.offset);
-    save_recording(recording);
+    const auto new_best = save_recording(recording);
     lg::info("replay: saved {} {} attempt with {} samples{}", recording.category,
              recording.completed ? "completed" : "unfinished", recording.samples.size(),
              recording.truncated ? " (duration limit reached)" : "");
+    if (new_best) {
+      lg::info("replay: updated local best for {} ({:.3f}s)", recording.category,
+               recording.duration_seconds);
+    }
     return bool_to_symbol(true);
   } catch (const std::exception& error) {
     g_replay_recorder.cancel();
@@ -124,6 +178,190 @@ u64 pc_replay_recording_active() {
 
 s64 pc_replay_recording_count() {
   return static_cast<s64>(g_replay_recorder.sample_count());
+}
+
+u64 pc_replay_recording_sample_extra(u32 art_group_ptr,
+                                     u32 position_ptr,
+                                     u32 rotation_ptr,
+                                     u32 scale_ptr) {
+  // Keep native replay entry points within the Windows trampoline's four register arguments.
+  if (!art_group_ptr || !position_ptr || !rotation_ptr || !scale_ptr) {
+    return bool_to_symbol(false);
+  }
+  try {
+    auto* art_group_string = Ptr<String>(art_group_ptr).c();
+    const auto art_group = std::string_view(art_group_string->data(), art_group_string->len);
+    const auto* position = Ptr<Vector>(position_ptr).c();
+    const auto* rotation = Ptr<Vector>(rotation_ptr).c();
+    const auto* scale = Ptr<Vector>(scale_ptr).c();
+    const auto recorded = g_replay_recorder.update_last_sample_extra(
+        art_group, position->data, rotation->data, scale->data, "", 0.f);
+    if (recorded && !g_replay_logged_extra) {
+      g_replay_logged_extra = true;
+      lg::info("replay: captured companion drawable {}", art_group);
+    }
+    return bool_to_symbol(recorded);
+  } catch (const std::exception& error) {
+    g_replay_recorder.cancel();
+    lg::error("replay: stopped recording after extra metadata error: {}", error.what());
+    return bool_to_symbol(false);
+  }
+}
+
+u64 pc_replay_recording_sample_extra_animation(u32 animation_ptr, u32 animation_frame_bits) {
+  if (!animation_ptr) {
+    return bool_to_symbol(false);
+  }
+  try {
+    auto* animation = Ptr<String>(animation_ptr).c();
+    return bool_to_symbol(g_replay_recorder.update_last_sample_extra_animation(
+        std::string_view(animation->data(), animation->len),
+        std::bit_cast<float>(animation_frame_bits)));
+  } catch (const std::exception& error) {
+    g_replay_recorder.cancel();
+    lg::error("replay: stopped recording after extra animation error: {}", error.what());
+    return bool_to_symbol(false);
+  }
+}
+
+s64 pc_replay_playback_start(u32 category_ptr) {
+  g_replay_playback.reset();
+  if (!category_ptr) {
+    return 0;
+  }
+
+  try {
+    auto* category_string = Ptr<String>(category_ptr).c();
+    const auto category = std::string_view(category_string->data(), category_string->len);
+    const auto directory = replay_directory_for(category);
+    const auto best_path = directory / "best-completed.ogr.json";
+    auto load_path = best_path;
+    if (!fs::exists(load_path)) {
+      // Phase 1 retained only the most recent completion. Promote it as the
+      // initial PB so existing recordings can be tested immediately; all
+      // subsequent completed runs use the normal fastest-time comparison.
+      load_path = directory / "last-completed.ogr.json";
+    }
+    if (!fs::exists(load_path)) {
+      lg::info("replay: no local best available for {}", category);
+      return 0;
+    }
+
+    auto playback = replay::load(load_path);
+    if (!playback.completed || playback.category != category) {
+      throw replay::FormatError("local best does not match the selected category");
+    }
+    if (load_path != best_path) {
+      replay::atomic_save(best_path, playback);
+      lg::info("replay: promoted the Phase 1 completion to the initial local best for {}",
+               category);
+    }
+    const auto sample_count = static_cast<s64>(playback.samples.size());
+    g_replay_playback.emplace(std::move(playback));
+    lg::info("replay: loaded local best for {} ({} samples)", category, sample_count);
+    return sample_count;
+  } catch (const std::exception& error) {
+    g_replay_playback.reset();
+    lg::warn("replay: could not load local best for playback: {}", error.what());
+    return 0;
+  }
+}
+
+u64 pc_replay_playback_sample_transform(s64 sample_index, u32 position_ptr, u32 rotation_ptr) {
+  if (!g_replay_playback || !position_ptr || !rotation_ptr || sample_index < 0 ||
+      sample_index >= static_cast<s64>(g_replay_playback->samples.size())) {
+    return bool_to_symbol(false);
+  }
+
+  const auto& sample = g_replay_playback->samples.at(static_cast<std::size_t>(sample_index));
+  auto* position = Ptr<Vector>(position_ptr).c();
+  auto* rotation = Ptr<Vector>(rotation_ptr).c();
+  for (std::size_t i = 0; i < 3; ++i) {
+    position->data[i] = sample.position_meters[i] * kReplayGameUnitsPerMeter;
+  }
+  position->data[3] = 1.f;
+  for (std::size_t i = 0; i < sample.rotation.size(); ++i) {
+    rotation->data[i] = sample.rotation[i];
+  }
+  return bool_to_symbol(true);
+}
+
+u64 pc_replay_playback_sample_metadata(s64 sample_index,
+                                       u32 state_ptr,
+                                       u32 animation_ptr,
+                                       u32 animation_info_ptr) {
+  if (!g_replay_playback || !state_ptr || !animation_ptr || !animation_info_ptr ||
+      sample_index < 0 || sample_index >= static_cast<s64>(g_replay_playback->samples.size())) {
+    return bool_to_symbol(false);
+  }
+
+  const auto& sample = g_replay_playback->samples.at(static_cast<std::size_t>(sample_index));
+  if (!copy_replay_string(state_ptr, sample.state) ||
+      !copy_replay_string(animation_ptr, sample.animation)) {
+    return bool_to_symbol(false);
+  }
+  auto* animation_info = Ptr<Vector>(animation_info_ptr).c();
+  animation_info->data[0] = sample.animation_frame;
+  animation_info->data[1] = std::bit_cast<float>(sample.status);
+  animation_info->data[2] = 0.f;
+  animation_info->data[3] = 0.f;
+  return bool_to_symbol(true);
+}
+
+u64 pc_replay_playback_sample_extra_transform(s64 sample_index,
+                                              u32 art_group_ptr,
+                                              u32 position_ptr,
+                                              u32 rotation_ptr) {
+  if (!g_replay_playback || !art_group_ptr || !position_ptr || !rotation_ptr ||
+      sample_index < 0 ||
+      sample_index >= static_cast<s64>(g_replay_playback->samples.size())) {
+    return bool_to_symbol(false);
+  }
+
+  const auto& sample = g_replay_playback->samples.at(static_cast<std::size_t>(sample_index));
+  if (sample.extra_art_group[0] == '\0') {
+    return bool_to_symbol(false);
+  }
+  if (!copy_replay_string(art_group_ptr, sample.extra_art_group)) {
+    return bool_to_symbol(false);
+  }
+  auto* position = Ptr<Vector>(position_ptr).c();
+  auto* rotation = Ptr<Vector>(rotation_ptr).c();
+  for (std::size_t i = 0; i < 3; ++i) {
+    position->data[i] = sample.extra_position_meters[i] * kReplayGameUnitsPerMeter;
+  }
+  position->data[3] = 1.f;
+  std::copy(sample.extra_rotation.begin(), sample.extra_rotation.end(), rotation->data);
+  return bool_to_symbol(true);
+}
+
+u64 pc_replay_playback_sample_extra_metadata(s64 sample_index,
+                                             u32 animation_ptr,
+                                             u32 animation_info_ptr,
+                                             u32 scale_ptr) {
+  if (!g_replay_playback || !animation_ptr || !animation_info_ptr || !scale_ptr || sample_index < 0 ||
+      sample_index >= static_cast<s64>(g_replay_playback->samples.size())) {
+    return bool_to_symbol(false);
+  }
+  const auto& sample = g_replay_playback->samples.at(static_cast<std::size_t>(sample_index));
+  if (sample.extra_art_group[0] == '\0' ||
+      !copy_replay_string(animation_ptr, sample.extra_animation)) {
+    return bool_to_symbol(false);
+  }
+  auto* animation_info = Ptr<Vector>(animation_info_ptr).c();
+  animation_info->data[0] = sample.extra_animation_frame;
+  auto* scale = Ptr<Vector>(scale_ptr).c();
+  std::copy(sample.extra_scale.begin(), sample.extra_scale.end(), scale->data);
+  animation_info->data[1] = 0.f;
+  animation_info->data[2] = 0.f;
+  animation_info->data[3] = 0.f;
+  return bool_to_symbol(true);
+}
+
+u64 pc_replay_playback_stop() {
+  const auto was_active = g_replay_playback.has_value();
+  g_replay_playback.reset();
+  return bool_to_symbol(was_active);
 }
 
 void update_discord_rpc(u32 discord_info) {

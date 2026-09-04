@@ -68,14 +68,39 @@ void pc_sr_mode_init_custom_category_info(s32 entry_index, u32 speedrun_custom_c
 void pc_sr_mode_dump_new_custom_category(u32 speedrun_custom_category_ptr);
 
 // Bounded local IL replay recording. Recording storage is owned by C++ and
-// allocated once; these functions are intentionally independent of playback
-// and networking.
+// allocated once.
 u64 pc_replay_recording_start(s64 start_ticks, u32 category_ptr);
 u64 pc_replay_recording_sample(s64 now_ticks, u32 position_ptr, u32 rotation_ptr, u32 velocity_ptr);
-u64 pc_replay_recording_sample_metadata(u32 state_ptr, u32 animation_ptr, u32 status);
+u64 pc_replay_recording_sample_metadata(u32 state_ptr,
+                                        u32 animation_ptr,
+                                        u32 animation_frame_bits,
+                                        u32 status);
+u64 pc_replay_recording_sample_extra(u32 art_group_ptr,
+                                     u32 position_ptr,
+                                     u32 rotation_ptr,
+                                     u32 scale_ptr);
+u64 pc_replay_recording_sample_extra_animation(u32 animation_ptr, u32 animation_frame_bits);
 u64 pc_replay_recording_finish(u32 completed_symbol);
 u64 pc_replay_recording_active();
 s64 pc_replay_recording_count();
+
+// One immutable local PB used by the GOAL ghost drawable. This storage never
+// aliases the recorder and contains no GOAL or streamed-art pointers.
+s64 pc_replay_playback_start(u32 category_ptr);
+u64 pc_replay_playback_sample_transform(s64 sample_index, u32 position_ptr, u32 rotation_ptr);
+u64 pc_replay_playback_sample_metadata(s64 sample_index,
+                                       u32 state_ptr,
+                                       u32 animation_ptr,
+                                       u32 animation_info_ptr);
+u64 pc_replay_playback_sample_extra_transform(s64 sample_index,
+                                              u32 art_group_ptr,
+                                              u32 position_ptr,
+                                              u32 rotation_ptr);
+u64 pc_replay_playback_sample_extra_metadata(s64 sample_index,
+                                             u32 animation_ptr,
+                                             u32 animation_info_ptr,
+                                             u32 scale_ptr);
+u64 pc_replay_playback_stop();
 
 struct DiscordInfo {
   float orb_count;          // float

@@ -12,7 +12,7 @@
 
 namespace replay {
 
-constexpr std::uint32_t kSchemaVersion = 1;
+constexpr std::uint32_t kSchemaVersion = 3;
 constexpr std::uint32_t kSampleRateHz = 60;
 constexpr std::size_t kMaxDurationSeconds = 10 * 60;
 constexpr std::size_t kMaxSamples = kSampleRateHz * kMaxDurationSeconds;
@@ -20,6 +20,7 @@ constexpr std::size_t kMaxFileBytes = 32 * 1024 * 1024;
 constexpr std::size_t kMaxCategoryBytes = 96;
 constexpr std::size_t kMaxStateBytes = 48;
 constexpr std::size_t kMaxAnimationBytes = 64;
+constexpr std::size_t kMaxArtGroupBytes = 64;
 
 struct Sample {
   float time_seconds = 0.f;
@@ -27,8 +28,17 @@ struct Sample {
   std::array<float, 4> rotation = {0.f, 0.f, 0.f, 1.f};
   std::array<float, 3> velocity_meters = {};
   std::uint32_t status = 0;
+  float animation_frame = 0.f;
   std::array<char, kMaxStateBytes> state = {};
   std::array<char, kMaxAnimationBytes> animation = {};
+  // Optional companion drawable (jetboard, mech, vehicle, etc.). Its art name
+  // is empty when this sample has no replay extra.
+  std::array<char, kMaxArtGroupBytes> extra_art_group = {};
+  std::array<float, 3> extra_position_meters = {};
+  std::array<float, 4> extra_rotation = {0.f, 0.f, 0.f, 1.f};
+  std::array<float, 4> extra_scale = {1.f, 1.f, 1.f, 1.f};
+  float extra_animation_frame = 0.f;
+  std::array<char, kMaxAnimationBytes> extra_animation = {};
 };
 
 struct File {
@@ -62,11 +72,20 @@ class Recorder {
                   const float* velocity_game_units,
                   std::string_view state,
                   std::string_view animation,
+                  float animation_frame,
                   std::uint32_t status);
   bool update_last_sample_metadata(std::string_view state,
                                    std::string_view animation,
+                                   float animation_frame,
                                    std::uint32_t status);
+  bool update_last_sample_extra(std::string_view art_group,
+                                const float* position_game_units,
+                                const float* rotation,
+                                const float* scale,
+                                std::string_view animation,
+                                float animation_frame);
   File finish(bool completed);
+  bool update_last_sample_extra_animation(std::string_view animation, float animation_frame);
   void cancel();
 
   bool active() const { return m_active; }
