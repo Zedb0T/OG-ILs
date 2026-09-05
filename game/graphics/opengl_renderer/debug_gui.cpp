@@ -9,7 +9,9 @@
 #include "game/graphics/gfx.h"
 #include "game/graphics/screenshot.h"
 #include "game/overlord/jak3/dma.h"
+#include "game/runtime.h"
 #include "game/system/hid/sdl_util.h"
+#include "game/system/replay_client.h"
 
 #include "fmt/format.h"
 #include "third-party/imgui/imgui.h"
@@ -131,6 +133,23 @@ void OpenGlDebugGui::draw(const DmaStats& dma_stats) {
     }
 
     if (ImGui::BeginMenu("Settings")) {
+      if (g_game_version == GameVersion::Jak3 && ImGui::BeginMenu("Ghost Server")) {
+        const auto server = replay_client::server_status();
+        if (ImGui::MenuItem("SparkedHost (default)", nullptr,
+                            server.url == replay_client::kSparkedHostServer)) {
+          replay_client::set_server(replay_client::Server::SparkedHost);
+        }
+        if (ImGui::MenuItem("Localhost (127.0.0.1:8765)", nullptr,
+                            server.url == replay_client::kLocalhostServer)) {
+          replay_client::set_server(replay_client::Server::Localhost);
+        }
+        ImGui::Separator();
+        ImGui::TextDisabled("%s", server.url.c_str());
+        ImGui::TextWrapped("%s", server.status.c_str());
+        ImGui::TextDisabled("Saved automatically. Retry the mission to apply.");
+        ImGui::TextDisabled("Pending uploads finish on their original server.");
+        ImGui::EndMenu();
+      }
       // ImGUI stuff
       if (ImGui::TreeNode("ImGui Styling")) {
         if (ImGui::InputFloat("Font Scale", &Gfx::g_debug_settings.imgui_font_scale)) {

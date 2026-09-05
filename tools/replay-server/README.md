@@ -25,6 +25,33 @@ loopback testing only; never expose this service publicly.
 Optional: `--data D:/Ghosts --port 8765`. The client port must match; it reads
 `server` from the configuration below on game startup.
 
+The ImGui toolbar has **Settings → Ghost Server → SparkedHost (default) / Localhost**.
+Press Left Alt to show the toolbar if hidden. SparkedHost is the default for new
+profiles; selecting localhost uses `http://127.0.0.1:8765`. The choice is saved
+automatically without changing player identity or race mode. Retry the mission
+to use the newly selected server's ghosts. Custom selections and downloaded
+replay caches are separate per server; existing uploads finish on their original
+server. The menu does not start a local server—run the command above first.
+
+## Player ping
+
+The bottom-left gameplay HUD says **Undetected player - Press L3 + D-pad Down
+to ping server** until a successful ping returns an admin-assigned name. Hold
+L3 and tap D-pad Down (either press order works). A ping uses the selected
+server, registers the saved player ID on first contact, and returns its current
+display name. Requests run off the game thread, with a pending-request guard
+and a three-second cooldown. Switching servers resets the displayed identity
+until the next ping; it does not change the saved ID or token.
+
+The admin player table includes **Last ping (your local time)** and refreshes
+every five seconds while visible, without discarding unsaved name edits.
+`Never` means no explicit ping has been received. The authenticated
+`POST /players/ping` body has `player_id` and `token`; timestamps are generated
+by the server in UTC and survive restarts. Existing databases gain a nullable
+`last_ping_at` column without replacing players or replay files. Uploads alone
+do not update this timestamp. After assigning a name, ping again in game to
+refresh the label.
+
 ## Native menu
 
 Restart the rebuilt game, choose an IL, then open **Options → Game Options →
@@ -154,6 +181,7 @@ stress-copy setting should stay at its normal value of one for these modes.
 ```powershell
 python -m unittest discover -s tools/replay-server -v
 .\out\build\Release\bin\goalc-test.exe --gtest_filter=ReplayFormat.*
+.\out\build\Release\bin\replay-client-test.exe
 ```
 
 16 server tests cover authenticated HTTP upload/download/admin, player and ID

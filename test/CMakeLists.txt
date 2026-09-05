@@ -41,6 +41,10 @@ target_link_libraries(goalc-test common runtime compiler gtest decomp Zydis libz
 add_executable(test_image_resize ${CMAKE_CURRENT_LIST_DIR}/common/test_image_resize.cpp)
 target_link_libraries(test_image_resize common)
 
+# Separate process: replay_client owns a singleton tied to its first profile.
+add_executable(replay-client-test ${CMAKE_CURRENT_LIST_DIR}/test_replay_client.cpp)
+target_link_libraries(replay-client-test runtime gtest_main)
+
 if(WIN32)
   target_link_libraries(goalc-test mman)
 endif()

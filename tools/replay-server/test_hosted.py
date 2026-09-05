@@ -63,6 +63,16 @@ class HostedTests(unittest.TestCase):
         finally:
             self.app.slot.release()
 
+    def test_hosted_ping_and_admin_timestamp(self):
+        status, raw = self.request("/players/ping", {"player_id": "a" * 32, "token": "b" * 64})
+        self.assertEqual(status, 200)
+        ping = json.loads(raw)
+        auth = "Basic " + base64.b64encode(b"user:pass").decode()
+        status, raw = self.request("/admin/players", HTTP_AUTHORIZATION=auth)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw)["players"][0]["last_ping_at"], ping["last_ping_at"])
+        self.assertEqual(self.request("/players/ping", {"player_id": "a" * 32, "token": "c" * 64})[0], 403)
+
     def test_full_checkout_update_and_safe_fallback(self):
         with tempfile.TemporaryDirectory() as root:
             (Path(root) / "repo").mkdir()

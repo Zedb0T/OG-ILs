@@ -1,6 +1,8 @@
 import copy
 import base64
 import json
+import sqlite3
+from datetime import datetime
 from pathlib import Path
 import tempfile
 import threading
@@ -50,6 +52,44 @@ class StoreTests(unittest.TestCase):
             original = replay(version=version)
             info = self.upload(version=version)
             self.assertEqual(json.loads(self.store.download(info["id"])), original)
+
+    def test_ping_registers_authenticates_and_persists_server_time(self):
+        self.assertIsNone(self.store.players()[0]["last_ping_at"])
+        fresh = "3" * 32
+        ping = self.store.ping(fresh, self.token)
+        self.assertEqual(ping["player_id"], fresh)
+        self.assertFalse(ping["identified"])
+        self.assertIsNotNone(datetime.fromisoformat(ping["last_ping_at"]).tzinfo)
+        before = self.store.players()
+        with self.assertRaises(APIError):
+            self.store.ping(fresh, "b" * 64)
+        self.assertEqual(self.store.players(), before)
+        self.store.rename(fresh, "Tester")
+        named = self.store.ping(fresh, self.token)
+        self.assertTrue(named["identified"])
+        self.assertEqual(named["display_name"], "Tester")
+        self.assertGreaterEqual(named["last_ping_at"], ping["last_ping_at"])
+        self.store.close()
+        self.store = Store(self.root)
+        player = next(p for p in self.store.players() if p["id"] == fresh)
+        self.assertEqual(player["last_ping_at"], named["last_ping_at"])
+        self.assertNotIn("token_hash", player)
+
+    def test_legacy_player_table_migrates_without_losing_identity(self):
+        with tempfile.TemporaryDirectory() as legacy:
+            path = Path(legacy) / "index.sqlite3"
+            with sqlite3.connect(path) as db:
+                db.execute("CREATE TABLE players (id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, display_name TEXT NOT NULL)")
+                row = self.store.authenticate(self.player, self.token)
+                db.execute("INSERT INTO players VALUES (?,?,?)", (self.player, row["token_hash"], "Legacy"))
+            db.close()
+            migrated = Store(legacy)
+            try:
+                self.assertEqual(migrated.players()[0]["display_name"], "Legacy")
+                self.assertIsNone(migrated.players()[0]["last_ping_at"])
+                self.assertTrue(migrated.ping(self.player, self.token)["identified"])
+            finally:
+                migrated.close()
 
     def test_identity_auth_and_admin_rename(self):
         first = self.upload()
@@ -203,6 +243,20 @@ class HTTPTests(unittest.TestCase):
         self.assertIn('id="password"', page)
         self.assertIn('event.preventDefault()', page)
         self.assertNotIn("admin-token.txt", page)
+        self.assertIn("Last ping (your local time)", page)
+        self.assertIn("last_ping_at", page)
+        self.assertIn("setInterval", page)
+
+    def test_ping_http_first_contact_and_admin_timestamp(self):
+        player, token = "7" * 32, "c" * 64
+        status, ping = self.call("/players/ping", {"player_id": player, "token": token})
+        self.assertEqual(status, 200)
+        auth = {"Authorization": "Basic " + base64.b64encode(b"user:pass").decode()}
+        self.assertEqual(self.call("/admin/players", headers=auth)[1]["players"][0]["last_ping_at"], ping["last_ping_at"])
+        self.assertEqual(self.call("/players/ping", {"player_id": player, "token": "d" * 64})[0], 403)
+        self.assertEqual(self.call("/players/ping", [1])[0], 400)
+        self.assertEqual(self.call("/players/ping", {"player_id": player, "token": token},
+                                   {"Origin": "https://evil.invalid"})[0], 400)
 
     def test_admin_credentials_can_be_overridden(self):
         self.store.admin_user = "tester"

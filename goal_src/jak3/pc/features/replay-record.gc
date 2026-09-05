@@ -19,6 +19,7 @@
 (define-extern replay-ghost-start! (function none))
 (define-extern replay-ghost-stop! (function none))
 (define-extern replay-ghost-update! (function none))
+(define-extern replay-player-ping-update! (function none))
 (define-extern *replay-ghost-stress-active?* symbol)
 
 (defun replay-record-extra! ((extra process-drawable))
@@ -70,6 +71,7 @@
   ;; to retire streamed-art references before those modes can invalidate a
   ;; ghost animation channel, then restore playback at the current sample when
   ;; normal gameplay resumes.
+  (replay-player-ping-update!)
   (replay-ghost-update!)
   (when (and (pc-replay-recording-active?)
              *target*

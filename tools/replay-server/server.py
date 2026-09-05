@@ -108,7 +108,8 @@ class Store:
             PRAGMA journal_mode=WAL;
             PRAGMA foreign_keys=ON;
             CREATE TABLE IF NOT EXISTS players (
-              id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, display_name TEXT NOT NULL);
+              id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, display_name TEXT NOT NULL,
+              last_ping_at TEXT);
             CREATE TABLE IF NOT EXISTS replays (
               id TEXT PRIMARY KEY, player_id TEXT NOT NULL REFERENCES players(id),
               digest TEXT NOT NULL, game TEXT NOT NULL, category TEXT NOT NULL,
@@ -118,6 +119,10 @@ class Store:
               UNIQUE(player_id, digest));
             CREATE INDEX IF NOT EXISTS by_mission ON replays(game, category, duration_seconds);
         """)
+        # Additive migration: retain existing identities, names, and replay files.
+        if "last_ping_at" not in {row[1] for row in self.db.execute("PRAGMA table_info(players)")}:
+            with self.db:
+                self.db.execute("ALTER TABLE players ADD COLUMN last_ping_at TEXT")
         # Recover a process interruption between a filename rename and its DB
         # commit. Match payload digest, never trust just the readable filename.
         with self.db:
@@ -152,9 +157,22 @@ class Store:
             existing = self.db.execute("SELECT token_hash FROM players WHERE id=?", (player_id,)).fetchone()
             if existing and not hmac.compare_digest(existing[0], digest):
                 raise APIError("Player authentication failed", 403)
-            self.db.execute("INSERT OR IGNORE INTO players VALUES (?,?,?)",
+            self.db.execute("INSERT OR IGNORE INTO players (id, token_hash, display_name) VALUES (?,?,?)",
                             (player_id, digest, "Unknown-" + player_id[:8]))
         return {"player_id": player_id}
+
+    def ping(self, player_id, token):
+        # A first ping registers the persistent game identity; later pings must
+        # prove ownership before changing its timestamp. Never trust client time.
+        with self.lock:
+            self.register(player_id, token)
+            now = datetime.now(timezone.utc).isoformat()
+            with self.db:
+                self.db.execute("UPDATE players SET last_ping_at=? WHERE id=?", (now, player_id))
+            player = self.authenticate(player_id, token)
+            return {"player_id": player_id, "display_name": player["display_name"],
+                    "identified": player["display_name"] != "Unknown-" + player_id[:8],
+                    "last_ping_at": now}
 
     def authenticate(self, player_id, token):
         with self.lock:
@@ -244,7 +262,7 @@ class Store:
 
     def players(self):
         with self.lock:
-            return [dict(r) for r in self.db.execute("SELECT id, display_name FROM players ORDER BY display_name, id")]
+            return [dict(r) for r in self.db.execute("SELECT id, display_name, last_ping_at FROM players ORDER BY display_name, id")]
 
     def rename(self, player_id, name):
         require(isinstance(name, str) and 1 <= len(name.strip()) <= 40 and all(ord(c) >= 32 for c in name), "Display name must be 1-40 characters")
@@ -274,12 +292,40 @@ class Store:
 
 
 ADMIN_HTML = b'''<!doctype html><meta charset="utf-8"><title>OpenGOAL ghost admin</title>
-<style>body{font:16px system-ui;max-width:850px;margin:3em auto;background:#17202b;color:#eee}input,button{padding:.6em;margin:.3em}code{font-size:13px}li{margin:1em 0}</style>
+<style>body{font:16px system-ui;max-width:1050px;margin:3em auto;padding:0 1em;background:#17202b;color:#eee}input,button{padding:.6em;margin:.3em}code{font-size:12px}.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:.7em;border-bottom:1px solid #435063}time{white-space:nowrap;font-size:14px}</style>
 <h1>Ghost players</h1><p>Sign in to manage display names. Names and readable filenames update together; replay IDs remain unchanged.</p>
-<form id="login"><label>Username <input id="username" name="username" value="user" autocomplete="username" maxlength="128" required></label><label>Password <input id="password" name="password" type="password" autocomplete="current-password" maxlength="256" required></label><button type="submit">Sign in / Load players</button></form><p id="status" role="status"></p><ul id="players"></ul>
+<form id="login"><label>Username <input id="username" name="username" value="user" autocomplete="username" maxlength="128" required></label><label>Password <input id="password" name="password" type="password" autocomplete="current-password" maxlength="256" required></label><button type="submit">Sign in / Load players</button></form><p id="status" role="status"></p>
+<p>Players can press L3 + D-pad Down in game to ping. Last ping refreshes every 5 seconds while this page is visible.</p>
+<div class="table-wrap"><table><thead><tr><th>Player ID</th><th>Display name</th><th>Last ping (your local time)</th><th>Action</th></tr></thead><tbody id="players"></tbody></table></div>
 <script>
 async function api(path, body){const credentials=document.querySelector('#username').value+':'+document.querySelector('#password').value;const encoded=btoa(String.fromCharCode(...new TextEncoder().encode(credentials)));const r=await fetch(path,{method:body?'POST':'GET',headers:{Authorization:'Basic '+encoded,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});const j=await r.json();if(!r.ok)throw Error(j.error);return j;}
-document.querySelector('#login').onsubmit=async(event)=>{event.preventDefault();const list=document.querySelector('#players');list.replaceChildren();try{const data=await api('/admin/players');for(const p of data.players){const li=document.createElement('li'),id=document.createElement('code'),name=document.createElement('input'),save=document.createElement('button');id.textContent=p.id;name.value=p.display_name;save.textContent='Save';save.onclick=async()=>{try{await api('/admin/players/'+p.id,{display_name:name.value});document.querySelector('#status').textContent='Saved';}catch(e){document.querySelector('#status').textContent=e.message}};li.append(id,name,save);list.append(li);}document.querySelector('#status').textContent='Signed in';}catch(e){document.querySelector('#status').textContent=e.message}};
+let signedIn=false,loading=false;
+const rows=new Map(),status=document.querySelector('#status');
+async function loadPlayers(){
+  if(loading)return;loading=true;
+  try{
+    const data=await api('/admin/players');signedIn=true;
+    for(const p of data.players){
+      let row=rows.get(p.id);
+      if(!row){
+        const tr=document.createElement('tr'),name=document.createElement('input'),ping=document.createElement('time'),save=document.createElement('button'),id=document.createElement('code');
+        id.textContent=p.id;name.value=p.display_name;name.maxLength=40;name.setAttribute('aria-label','Display name for '+p.id);save.textContent='Save';
+        row={tr,name,ping,saved:p.display_name};rows.set(p.id,row);
+        save.onclick=async()=>{save.disabled=true;try{const result=await api('/admin/players/'+p.id,{display_name:name.value});row.saved=result.display_name;name.value=result.display_name;status.textContent='Saved';}catch(e){status.textContent=e.message}finally{save.disabled=false}};
+        for(const element of [id,name,ping,save]){const td=document.createElement('td');td.append(element);tr.append(td)}
+        document.querySelector('#players').append(tr);
+      }
+      // Refresh timestamps without replacing inputs or erasing an unsaved edit.
+      if(document.activeElement!==row.name&&row.name.value===row.saved){row.name.value=p.display_name;row.saved=p.display_name}
+      row.ping.dateTime=p.last_ping_at||'';
+      row.ping.textContent=p.last_ping_at?new Date(p.last_ping_at).toLocaleString():'Never';
+      row.ping.title=p.last_ping_at||'No ping received yet';
+    }
+    status.textContent=data.players.length?'Signed in - player pings are live':'Signed in - no players yet';
+  }catch(e){status.textContent=e.message}finally{loading=false}
+}
+document.querySelector('#login').onsubmit=async(event)=>{event.preventDefault();signedIn=false;await loadPlayers()};
+setInterval(()=>{if(signedIn&&!document.hidden)loadPlayers()},5000);
 </script>'''
 
 
@@ -311,6 +357,10 @@ def route(store, method, target, authorization, player_id, read_body):
             raise APIError("Not found", 404)
         return 200, data, "application/json"
     if method == "POST":
+        if path == "/players/ping":
+            data = json.loads(read_body())
+            require(isinstance(data, dict), "Expected player identity object")
+            return 200, store.ping(data.get("player_id"), data.get("token")), "application/json"
         if path == "/players":
             data = json.loads(read_body())
             return 200, store.register(data.get("player_id"), data.get("token")), "application/json"

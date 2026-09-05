@@ -1,6 +1,7 @@
 #include "replay_client.h"
 
 #include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <fstream>
@@ -122,7 +123,7 @@ class Client {
       config = json::parse(file_util::read_text_file(config_path));
     } else {
       config = {{"player_id", random_hex(16)}, {"player_token", random_hex(32)},
-                {"server", "https://opengoal-ghosts.sparked.network"}, {"mode", 0},
+                {"server", kSparkedHostServer}, {"mode", 0},
                 {"submit_completed", true}, {"custom", json::object()}};
       save_json(config_path, config);
     }
@@ -143,6 +144,18 @@ class Client {
 
   fs::path local(const std::string& category, const char* filename) const {
     return root / "replays" / category / filename;
+  }
+  fs::path cache_directory(const std::string& server) const {
+    // Collision-free, filesystem-safe server namespace. Split long custom URLs
+    // so no individual path component exceeds filesystem filename limits.
+    std::string encoded;
+    for (unsigned char ch : server) {
+      encoded += "0123456789abcdef"[ch >> 4];
+      encoded += "0123456789abcdef"[ch & 15];
+    }
+    auto path = root / "ghost-cache" / "servers";
+    for (size_t i = 0; i < encoded.size(); i += 120) path /= encoded.substr(i, 120);
+    return path;
   }
   std::shared_ptr<const replay::File> load_local(const std::string& category, bool last) {
     auto path = local(category, last ? "last-attempt.ogr.json" : "best-completed.ogr.json");
@@ -168,16 +181,63 @@ class Client {
       catch (const std::exception& error) { std::lock_guard lock(mutex); status = error.what(); }
     }
   }
-  void register_player() {
-    request(base, "/players", json({{"player_id", player}, {"token", token}}).dump());
+  void register_player(const std::string& server) {
+    request(server, "/players", json({{"player_id", player}, {"token", token}}).dump());
+  }
+  bool ping() { // caller owns mutex; no GOAL pointers or HTTP on the game thread
+    const auto now = std::chrono::steady_clock::now();
+    if (ping_pending || now < next_ping) return false;
+    const auto server = base;
+    const auto generation = server_revision;
+    enqueue([this, server, generation] {
+      std::string name, result_status;
+      bool identified = false;
+      try {
+        const auto reply = json::parse(request(server, "/players/ping",
+            json({{"player_id", player}, {"token", token}}).dump()));
+        if (reply.at("player_id").get<std::string>() != player)
+          throw std::runtime_error("Server returned a different player");
+        name = reply.at("display_name").get<std::string>();
+        identified = reply.at("identified").get<bool>();
+        // Server-controlled names must never become GOAL text directives.
+        for (auto& ch : name) if (ch < 32 || ch > 126 || ch == '~') ch = '_';
+        if (name.size() > 40) name.resize(40);
+        result_status = identified ? "Ping sent" : "Ping sent - waiting for an admin to assign your name";
+      } catch (const std::exception& error) {
+        result_status = std::string("Ping failed: ") + error.what();
+      }
+      std::lock_guard lock(mutex);
+      if (generation != server_revision) return;
+      ping_pending = false;
+      player_identified = identified;
+      player_name = std::move(name);
+      ping_status = std::move(result_status);
+    });
+    ping_pending = true;
+    next_ping = now + std::chrono::seconds(3);
+    ping_status = "Pinging server...";
+    return true;
   }
   void upload(std::string contents, std::string category) { // caller owns mutex
-    enqueue([this, contents = std::move(contents), category = std::move(category)] {
-      register_player();
-      request(base, "/replays", contents, player, token);
+    // Jobs keep the destination selected when they were submitted. Switching
+    // servers must never redirect an already queued upload to another host.
+    const auto server = base;
+    const auto generation = server_revision;
+    enqueue([this, server, generation, contents = std::move(contents)] {
+      std::string result_status;
+      bool submitted = false;
+      try {
+        register_player(server);
+        request(server, "/replays", contents, player, token);
+        result_status = "Submitted replay";
+        submitted = true;
+      } catch (const std::exception& error) {
+        result_status = error.what();
+      }
       std::lock_guard lock(mutex);
-      status = "Submitted replay";
-      prepared_category.clear(); // next start refreshes rankings
+      if (generation != server_revision) return;
+      status = std::move(result_status);
+      if (submitted) prepared_category.clear(); // next start refreshes rankings
     });
     status = "Submitting replay...";
   }
@@ -185,6 +245,7 @@ class Client {
     if (!category_ok(category)) return;
     if (!force && prepared_category == category) return;
     const auto generation = ++revision;
+    const auto server = base;
     const auto selected_mode = mode;
     std::vector<std::string> selected;
     if (config["custom"].contains(category)) selected = config["custom"][category].get<std::vector<std::string>>();
@@ -194,7 +255,8 @@ class Client {
     prepared.clear();
     ready = false;
     status = "Loading ghosts...";
-    enqueue([this, category, generation, selected_mode, selected, offset] {
+    enqueue([this, server, category, generation, selected_mode, selected, offset] {
+      { std::lock_guard lock(mutex); if (generation != revision) return; }
       std::vector<Ghost> result;
       json rows = json::array();
       std::string result_status = "Ready";
@@ -205,7 +267,7 @@ class Client {
           auto file = selected_mode == 3 ? load_local(category, true) : best;
           if (file) result.push_back({file, selected_mode == 3 ? "Last Attempt" : "Personal Best"});
         } else {
-          const auto listing = json::parse(request(base, "/replays?game=jak3&category=" + category + "&offset=" + std::to_string(offset)));
+          const auto listing = json::parse(request(server, "/replays?game=jak3&category=" + category + "&offset=" + std::to_string(offset)));
           rows = listing.at("replays");
           more = !listing.at("next_offset").is_null();
           json choices = json::array();
@@ -214,22 +276,22 @@ class Client {
             for (const auto& id : selected) {
               if (!id_ok(id)) continue;
               auto match = std::find_if(rows.begin(), rows.end(), [&](const json& row) { return row.at("id") == id; });
-              choices.push_back(match != rows.end() ? *match : json::parse(request(base, "/replays/" + id + "/metadata")));
+              choices.push_back(match != rows.end() ? *match : json::parse(request(server, "/replays/" + id + "/metadata")));
             }
           } else {
             auto url = "/selection?category=" + category + "&player_id=" + player + "&mode=" + (selected_mode == 2 ? "wr" : "default");
             if (best) url += "&best_seconds=" + std::to_string(best->duration_seconds);
-            choices = json::parse(request(base, url)).at("replays");
+            choices = json::parse(request(server, url)).at("replays");
           }
           size_t memory = 0;
           for (const auto& row : choices) {
             const auto id = row.at("id").get<std::string>();
             if (!id_ok(id)) throw std::runtime_error("Invalid replay ID from server");
-            const auto cache = root / "ghost-cache" / (id + ".ogr.json");
+            const auto cache = cache_directory(server) / (id + ".ogr.json");
             std::shared_ptr<replay::File> file;
             if (fs::exists(cache)) file = std::make_shared<replay::File>(replay::load(cache));
             else {
-              file = std::make_shared<replay::File>(replay::parse(request(base, "/replays/" + id)));
+              file = std::make_shared<replay::File>(replay::parse(request(server, "/replays/" + id)));
               replay::atomic_save(cache, *file);
             }
             if (file->category != category || file->game != "jak3" ||
@@ -273,13 +335,72 @@ class Client {
   fs::path root, config_path;
   json config, catalog = json::array();
   std::string player, token, base, prepared_category, status = "Ready";
+  std::string player_name, ping_status;
+  bool player_identified = false, ping_pending = false;
+  std::chrono::steady_clock::time_point next_ping{};
   std::vector<Ghost> prepared;
-  int mode = 0, page = 0, revision = 0;
+  int mode = 0, page = 0, revision = 0, server_revision = 0;
   std::thread worker;
 };
 
 Client& client() { static Client instance; return instance; }
 }  // namespace
+
+ServerStatus server_status() {
+  try {
+    auto& c = client();
+    std::lock_guard lock(c.mutex);
+    return {c.base, c.status};
+  } catch (const std::exception& error) {
+    return {"", error.what()};
+  }
+}
+
+bool set_server(Server server) {
+  if (server != Server::SparkedHost && server != Server::Localhost) return false;
+  try {
+    auto& c = client();
+    std::lock_guard lock(c.mutex);
+    const std::string next_server = server == Server::Localhost ? kLocalhostServer : kSparkedHostServer;
+    if (c.base == next_server) return true;
+    auto next_config = c.config;
+    // Preserve legacy custom selections as the current server's selections,
+    // and restore them when returning. Replay IDs belong to one server only.
+    next_config["custom_by_server"][c.base] = next_config.value("custom", json::object());
+    next_config["custom"] = next_config["custom_by_server"].value(next_server, json::object());
+    next_config["server"] = next_server;
+    // Save before changing live state; a disk error leaves the old selection intact.
+    try {
+      save_json(c.config_path, next_config);
+    } catch (const std::exception& error) {
+      c.status = error.what();
+      return false;
+    }
+    const auto category = c.prepared_category;
+    c.config = std::move(next_config);
+    c.base = next_server;
+    ++c.revision;
+    ++c.server_revision;
+    c.player_name.clear();
+    c.player_identified = false;
+    c.ping_pending = false;
+    c.ping_status.clear();
+    c.next_ping = {};
+    c.prepared_category.clear();
+    c.prepared.clear();
+    c.catalog = json::array();
+    c.ready = false;
+    c.has_more = false;
+    c.page = 0;
+    c.status = "Server changed - retry mission to apply";
+    // A full queue is temporary: leave the category invalid so prepare retries.
+    if (c.jobs.size() < 8) c.refresh(category);
+    return true;
+  } catch (const std::exception& error) {
+    lg::warn("replay client server selection: {}", error.what());
+    return false;
+  }
+}
 
 int command(int operation, int value, const std::string& category) {
   try {
@@ -318,6 +439,7 @@ int command(int operation, int value, const std::string& category) {
         if (!category_ok(category)) return 0;
         c.config["custom"][category] = json::array();
         save_json(c.config_path, c.config); c.refresh(category, true); return 1;
+      case 16: return c.ping() ? 1 : 0;
       default: return 0;
     }
   } catch (const std::exception& e) { lg::warn("replay client: {}", e.what()); return 0; }
@@ -328,6 +450,9 @@ std::string text(int operation, int index) {
     auto& c = client(); std::lock_guard lock(c.mutex);
     if (operation == 0) return c.status;
     if (operation == 3) return "Unknown / ID " + c.player;
+    if (operation == 4) return (c.player_identified ? "Player: " + c.player_name : "Undetected player") +
+                              std::string(" - Press L3 + D-pad Down to ping server");
+    if (operation == 5) return c.ping_status;
     if (operation == 1 && index >= 0 && index < static_cast<int>(c.catalog.size())) {
       const auto& row = c.catalog.at(index);
       const auto& selected = c.config["custom"][c.prepared_category];
