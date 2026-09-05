@@ -130,7 +130,10 @@ requests. The server only binds loopback and rejects foreign Host/Origin values.
 Admin writes require username/password authentication; player upload Bearer
 credentials are unchanged. Payload validation is **not anti-cheat**:
 completion claims and times are not cryptographically verified. Do not expose
-this standard-library server to the internet or forward its port.
+the standard-library development server to the internet or forward its port.
+The hosted entry point uses separate bounds: 4 MiB per upload, one active replay
+request, eight connections, and a 128 MiB replay-storage budget on the initial
+1,000 MiB allocation. See SPARKEDHOST.md for the restart and monitoring setup.
 
 ## Client lifetime and resource limits
 

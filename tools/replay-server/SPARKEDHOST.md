@@ -75,4 +75,14 @@ upload/download round trip passed. The local PB's SHA-256 remained unchanged.
 The 30-minute `monitor-ghost-rebuild-server` heartbeat monitors this service only.
 The game client now supports verified HTTPS and the new profile default is this
 host; the user's existing test profile was updated without changing identity.
-Restart-to-new-commit persistence verification is the final deployment check.
+Restart verification passed: SparkedHost fetched `1b17714ed`, ran all 20 tests,
+and retained the exact same replay ID and content after repeat submission (dedupe).
+Correct admin auth, wrong-password rejection and HTTPS health passed again using
+curl, the game's HTTP transport. Eight sequential curl health checks also passed.
+Post-restart usage was about 110 MiB memory / 598 MiB disk, so no allocation
+increase was needed. The verification's Python urllib intermediary intermittently
+returned `502 Server: solar-system`; curl and the browser passed. Monitoring
+should distinguish intermediary connectivity failures from actual server outages.
+Full GOAL build (1168 targets), native gk build, and 10 replay-format tests passed.
+The rebuilt game is ready for the user's manual hosted-playback test; no new
+end-to-end in-game hosted playback run is claimed here.
