@@ -34,6 +34,28 @@ bool category_ok(const std::string& value) {
 bool id_ok(const std::string& value) {
   return std::regex_match(value, std::regex("[a-f0-9]{32}"));
 }
+std::vector<std::string> selected_ids(const json& custom, const std::string& category) {
+  std::vector<std::string> result;
+  if (!custom.is_object()) return result;
+  const auto found = custom.find(category);
+  if (found == custom.end() || !found->is_array()) return result;
+  for (const auto& entry : *found) {
+    if (!entry.is_string()) continue;
+    const auto& id = entry.get_ref<const std::string&>();
+    if (id_ok(id) && std::find(result.begin(), result.end(), id) == result.end())
+      result.push_back(id);
+    if (result.size() == kCustomLimit) break;
+  }
+  return result;
+}
+json normalize_custom(const json& custom) {
+  json result = json::object();
+  if (custom.is_object()) {
+    for (auto it = custom.begin(); it != custom.end(); ++it)
+      result[it.key()] = selected_ids(custom, it.key());
+  }
+  return result;
+}
 std::string time_label(float seconds) {
   std::ostringstream output;
   output << std::fixed << std::setprecision(3) << seconds << 's';
@@ -134,6 +156,13 @@ class Client {
         !std::regex_match(base, std::regex("(http://127\\.0\\.0\\.1:[0-9]{1,5}|https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?)")))
       throw std::runtime_error("Invalid ghost-client.json identity/server");
     mode = std::clamp(config.value("mode", 0), 0, 4);
+    // Older menu reads inserted null entries into this map. Repair only the
+    // selections; retain player identity, endpoints and all replay files.
+    const auto custom = normalize_custom(config.value("custom", json::object()));
+    if (!config.contains("custom") || config.at("custom") != custom) {
+      config["custom"] = custom;
+      save_json(config_path, config);
+    }
     worker = std::thread([this] { work(); });
   }
   ~Client() {
@@ -254,9 +283,8 @@ class Client {
     const auto generation = ++revision;
     const auto server = base;
     const auto selected_mode = mode;
-    std::vector<std::string> selected;
-    if (config["custom"].contains(category)) selected = config["custom"][category].get<std::vector<std::string>>();
-    if (selected.size() > kCustomLimit) selected.resize(kCustomLimit);
+    // Never convert an unchecked JSON null/non-array on the GOAL caller's stack.
+    const auto selected = selected_ids(config.at("custom"), category);
     const auto offset = page * 100;
     prepared_category = category;
     prepared.clear();
@@ -374,7 +402,8 @@ bool set_server(Server server) {
     // Preserve legacy custom selections as the current server's selections,
     // and restore them when returning. Replay IDs belong to one server only.
     next_config["custom_by_server"][c.base] = next_config.value("custom", json::object());
-    next_config["custom"] = next_config["custom_by_server"].value(next_server, json::object());
+    next_config["custom"] = normalize_custom(
+        next_config["custom_by_server"].value(next_server, json::object()));
     next_config["server"] = next_server;
     // Save before changing live state; a disk error leaves the old selection intact.
     try {
@@ -467,8 +496,10 @@ std::string text(int operation, int index) {
     if (operation == 5) return c.ping_status;
     if (operation == 1 && index >= 0 && index < static_cast<int>(c.catalog.size())) {
       const auto& row = c.catalog.at(index);
-      const auto& selected = c.config["custom"][c.prepared_category];
-      const auto chosen = selected.is_array() && std::find(selected.begin(), selected.end(), row.at("id")) != selected.end();
+      // A display read must not create a null selection for a new mission.
+      const auto selected = selected_ids(c.config.at("custom"), c.prepared_category);
+      const auto chosen = row.at("id").is_string() &&
+          std::find(selected.begin(), selected.end(), row.at("id").get_ref<const std::string&>()) != selected.end();
       std::string name = row.at("display_name").get<std::string>();
       if (name.size() > 28) name.resize(28);
       for (auto& ch : name) if (ch < 32 || ch > 126 || ch == '~') ch = '_';

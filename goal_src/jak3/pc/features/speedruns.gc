@@ -1075,9 +1075,22 @@
     )
   (-> this recorded-time))
 
+(defun speedrun-saved-category ((value int))
+  "Validate persisted built-in selections. Custom runs need additional unsaved state."
+  (if (and (>= value (speedrun-category newgame-normal))
+           (<= value (speedrun-category palace-ruins-attack-w-bbush)))
+      (the-as speedrun-category value)
+      (speedrun-category newgame-normal)))
+
 (defmethod set-category! ((this speedrun-info) (category speedrun-category))
   (replay-record-stop! #f)
   (reset! (the-as speedrun-timer (ppointer->process (-> *speedrun-manager* 0 timer))))
+  ;; Persist when the user confirms a selection, even before starting/finishing
+  ;; an attempt. Avoid rewriting settings when reselecting the same mission.
+  (let ((saved (speedrun-saved-category (the-as int category))))
+    (when (!= (-> *pc-settings* last-selected-mission) saved)
+      (set! (-> *pc-settings* last-selected-mission) (the-as int saved))
+      (commit-to-file *pc-settings*)))
   (set! (-> this category) category))
 
 (defmethod start-individual-level-run! ((this speedrun-info) (tsk game-task) (side-mish? symbol) (secrets game-secrets))

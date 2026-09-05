@@ -234,6 +234,10 @@
 
   (set! (-> obj music-unlocked) (new 'global 'bit-array (-> *music-player-tracks* length)))
   ((method-of-type pc-settings initialize) obj)
+  ;; Settings have now been loaded (or defaulted). Restore only the selection:
+  ;; no timer/manager exists yet and startup must not launch a mission itself.
+  (set! (-> *speedrun-info* category)
+        (speedrun-saved-category (-> obj last-selected-mission)))
   (set! (-> *setting-control* user-default sfx-volume) (-> obj memcard-volume-sfx))
   (set! (-> *setting-control* user-default music-volume) (-> obj memcard-volume-music))
   (set! (-> *setting-control* user-default dialog-volume) (-> obj memcard-volume-dialog))
@@ -677,6 +681,9 @@
         )
       )
     ;; mod stuff
+    (("last-selected-mission")
+      (set! (-> obj last-selected-mission)
+            (the-as int (speedrun-saved-category (file-stream-read-int file)))))
     (("speedometer") (set! (-> obj speedometer) (the-as speedometer-setting (file-stream-read-int file))))
     (("speedometer-m-s") (set! (-> obj speedometer-m-s) (the-as speedometer-m-s (file-stream-read-int file))))
     (("timer-location") (set! (-> obj timer-location) (the-as timer-location (file-stream-read-int file))))
@@ -867,6 +874,7 @@
   (format file ")~%~%")
   
   ;; mod stuff
+  (format file "  (last-selected-mission ~D)~%" (-> obj last-selected-mission))
   (format file "  (speedometer ~D)~%" (-> obj speedometer))
   (format file "  (speedometer-m-s ~D)~%" (-> obj speedometer-m-s))
   (format file "  (timer-location ~D)~%" (-> obj timer-location))

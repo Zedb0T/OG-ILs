@@ -47,6 +47,40 @@ TEST(ReplayClient, BootIdentityFromSelectedServer) {
   EXPECT_TRUE(replay_client::text(5, 0).empty());
 }
 
+TEST(ReplayClient, NullCustomSelectionsAreSafeAndMenuReadsDoNotMutateSettings) {
+  const auto* profile = std::getenv("OG_REPLAY_TEST_PROFILE");
+  if (!profile) GTEST_SKIP() << "Run tools/replay-server/test_client_identity.py";
+  file_util::override_user_config_dir(fs::path(profile), true);
+  const auto path = file_util::get_user_features_dir(GameVersion::Jak3) / "ghost-client.json";
+  auto read_config = [&] { return nlohmann::json::parse(file_util::read_text_file(path)); };
+  const auto original = read_config();
+  EXPECT_EQ(replay_client::command(0, 0, ""), 4);
+  const auto repaired = read_config();
+  EXPECT_EQ(repaired.at("player_id"), original.at("player_id"));
+  EXPECT_EQ(repaired.at("player_token"), original.at("player_token"));
+  EXPECT_EQ(repaired.at("custom").at("wascity-bbush-get-to-18"), nlohmann::json::array());
+  EXPECT_EQ(repaired.at("custom").at("bad-entry"), nlohmann::json::array());
+  EXPECT_EQ(repaired.at("custom").at("valid-entry"), nlohmann::json::array({std::string(32, 'd')}));
+
+  for (const auto* category : {"wascity-bbush-get-to-18", "previously-unseen-mission"}) {
+    replay_client::prepare(category);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (replay_client::text(0, 0) == "Loading ghosts..." &&
+           std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    ASSERT_EQ(replay_client::text(0, 0), "No replay available for this mode");
+    ASSERT_EQ(replay_client::command(3, 0, ""), 1);
+    EXPECT_TRUE(replay_client::snapshot(category).empty());
+    for (int i = 0; i < 10; ++i) EXPECT_EQ(replay_client::text(1, 0), "[ ] Test Player 1.000s");
+    EXPECT_EQ(replay_client::command(11, 0, ""), 1); // persist after reading the menu
+    EXPECT_EQ(read_config(), repaired); // no inserted null/missing mission key
+  }
+  // Repair legacy server-specific selections too, without making HTTP requests.
+  EXPECT_EQ(replay_client::command(1, 4, ""), 4); // invalidate category before switching
+  ASSERT_TRUE(replay_client::set_server(replay_client::Server::Localhost));
+  EXPECT_EQ(read_config().at("custom").at("legacy-mission"), nlohmann::json::array());
+}
+
 TEST(ReplayClient, ServerSelectionPersistsWithoutChangingIdentityOrRaceMode) {
   // No HTTP jobs: an empty category is intentionally invalid. Never touch the
   // real user profile, even when this test is launched without a project cwd.
