@@ -73,7 +73,11 @@
       (pc-replay-client-command 16 0 ""))
     (pc-replay-client-text 4 0 *replay-player-ping-label*)
     (pc-replay-client-text 5 0 *replay-player-ping-status*)
-    (with-dma-buffer-add-bucket ((buf (-> (current-frame) debug-buf)) (bucket-id debug-no-zbuf2))
+    ;; Retail frames have no debug DMA buffer. Match end-display's choice of
+    ;; the normal global buffer unless debug segments are actually loaded.
+    (with-dma-buffer-add-bucket ((buf (if *debug-segment*
+                                        (-> (current-frame) debug-buf)
+                                        (-> (current-frame) global-buf))) (bucket-id debug-no-zbuf2))
       (draw-string-xy *replay-player-ping-label* buf 4 (- (get-screen-y 1.0) 40)
                       (font-color white) (font-flags shadow))
       (draw-string-xy *replay-player-ping-status* buf 4 (- (get-screen-y 1.0) 30)
