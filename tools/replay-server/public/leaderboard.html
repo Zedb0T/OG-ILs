@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Jak 3 · IL Leaderboards</title><meta name="description" content="Jak 3 OpenGOAL mission points, records, and player standings. Browse Speedrun.com results or uploaded ghosts.">
+<link rel="stylesheet" href="{{css}}"><script src="{{js}}" defer></script></head>
+<body>
+<header class="masthead"><a href="/" class="brand">OPEN<span>GOAL</span><small>JAK 3 / INDIVIDUAL LEVELS</small></a><nav aria-label="Site"><a href="/api">API</a><a href="/admin">Admin ↗</a></nav></header>
+<main>
+<div class="title-row"><div><p class="eyebrow">THE MISSION STANDINGS</p><h1>Every second counts.</h1></div><div class="source-control"><label for="source">Leaderboard source</label><select id="source"><option value="speedrun">Speedrun.com</option><option value="ghosts">Uploaded ghosts</option></select></div></div>
+<div class="toolbar"><div class="view-tabs" role="group" aria-label="Leaderboard view"><button id="view-points" aria-pressed="true">Points standings</button><button id="view-missions" aria-pressed="false">Missions</button></div><div class="group-control"><label for="group">Missions</label><select id="group"><option value="all">All missions</option><option value="main">Main missions</option><option value="orb">Orb searches</option><option value="side">Other side missions</option></select></div><button id="refresh" class="quiet">Refresh ↻</button></div>
+<p id="source-note" class="source-note">Speedrun.com · Verified Any% runs · Default subcategories</p>
+<div class="summary" id="summary" hidden><div><strong id="stat-players">—</strong><span>RANKED PLAYERS</span></div><div><strong id="stat-missions">—</strong><span>MISSIONS WITH TIMES</span></div><div><strong>100<span class="unit">pts</span></strong><span>PER MISSION WIN</span></div></div>
+<section class="board" aria-labelledby="board-title" aria-busy="true">
+<div class="board-heading"><div><button id="back" class="quiet" hidden>← Back</button><h2 id="board-title">Points standings</h2><p id="board-description">Your best result on each mission, added together.</p></div><span id="row-count" class="tag"></span></div>
+<p id="status" role="status">Loading the leaderboard…</p>
+<div class="table-wrap" id="table-wrap" hidden><table><caption class="sr-only" id="table-caption">Points standings</caption><thead id="table-head"></thead><tbody id="table-body"></tbody></table></div>
+<div class="pagination"><button id="previous" class="quiet" disabled>← Previous</button><span id="page-label"></span><button id="next" class="quiet" disabled>Next →</button></div>
+</section>
+<div class="below-board"><details><summary>How points work</summary><p>A mission win earns <b>100</b> points; second earns <b>97</b>; third earns <b>95</b>. Fourth starts at <b>94</b>, then points scale down using the number of ranked players across the selected source.</p><p>Only each player’s fastest eligible time counts per mission. Tied times share place and points (1, 1, 3). Equal total points share overall rank. Group filters change which missions are summed, not the points formula.</p><a href="/api#scoring">Full scoring rules →</a></details><p id="freshness">Checking cache status…</p></div>
+<noscript><p>This view needs JavaScript. Public JSON data is available through the <a href="/api">leaderboard API</a>.</p></noscript>
+</main><footer><span>OPEN<span class="accent">GOAL</span> / COMMUNITY LEADERBOARDS</span><span>Speedrun.com and ghost identities are kept separate.</span></footer>
+</body></html>

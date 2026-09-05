@@ -57,6 +57,16 @@ No replays are automatically deleted. Monitor total container disk as well as da
 
 ## Acceptance and monitoring
 
+The public root now serves source-selectable points standings; `/admin` remains
+the protected dashboard and `/api` documents the read-only leaderboard API.
+No additional packages or startup settings are needed for leaderboards.
+Keep `data/speedrun-leaderboard-v1.json` with the data volume: startup serves this
+last-good cache immediately and refreshes it hourly in the background. On the
+first deployment, the sequential 131-mission crawl takes roughly three minutes;
+`/api/v1/status?source=speedrun` reports progress while ghost standings work
+immediately. Failed refreshes retain the old snapshot and schedule a retry.
+Do not repeatedly restart a cold server to force a refresh.
+
 Verify HTTPS `/health`, authenticated upload/download, admin name mapping, and
 restart persistence. Check the startup console for the actual Git commit.
 Monitor CPU, memory, restarts, disk growth, health latency and 413/503/507 errors.

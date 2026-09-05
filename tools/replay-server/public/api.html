@@ -1,0 +1,29 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Leaderboard API · OpenGOAL</title><link rel="stylesheet" href="{{css}}"></head><body>
+<header class="masthead"><a class="brand" href="/">OPEN<span>GOAL</span><small>JAK 3 / INDIVIDUAL LEVELS</small></a><nav aria-label="Site"><a href="/">Leaderboards</a><a href="/admin">Admin ↗</a></nav></header>
+<main class="api-page"><p class="eyebrow">PUBLIC / READ-ONLY / VERSION 1</p><h1>Leaderboard API</h1><p>The website and future in-game browser can use these same JSON endpoints. No login is required. Existing ghost recording, selection, and admin APIs are unchanged.</p>
+<h2>Choose a source</h2><p>Every data endpoint accepts <code>source=speedrun</code> (default) or <code>source=ghosts</code>. The current game is <code>game=jak3</code>. Player and mission IDs belong to their source: never join accounts by display name.</p>
+<h2>Endpoints</h2><ul>
+<li><a href="/api/v1/leaderboards/points?source=speedrun"><code>GET /api/v1/leaderboards/points</code></a> — ranked point totals, mission counts, tied and untied WR counts.</li>
+<li><a href="/api/v1/missions?source=speedrun"><code>GET /api/v1/missions</code></a> — mission IDs, labels, groups, player counts, WR times, and subcategory labels.</li>
+<li><code>GET /api/v1/missions/{mission_id}/leaderboard</code> — each player's best run, time, place, points, and source link.</li>
+<li><code>GET /api/v1/players/{player_id}</code> — player totals and per-mission results.</li>
+<li><a href="/api/v1/status?source=speedrun"><code>GET /api/v1/status</code></a> — cache availability, age/staleness, progress, and next refresh.</li>
+<li><a href="/api/v1/scoring"><code>GET /api/v1/scoring</code></a> — machine-readable scoring rules.</li></ul>
+<h2>Pagination and groups</h2><p>Use <code>offset=0&amp;limit=50</code>; limits are 1–100. Follow <code>next_offset</code> until it is <code>null</code>. <code>group=all|main|orb|side</code> filters missions and point totals. Overall ranks still refer to the full selected group, not the current page.</p>
+<pre><code>{
+  "api_version": 1, "game": "jak3", "source": "speedrun",
+  "group": "all", "scoring_id": "il-points-v1",
+  "revision": "opaque-snapshot-version", "updated_at": "ISO-8601 UTC",
+  "total_players": 0, "ranked_missions": 0,
+  "items": [], "total": 0, "offset": 0, "limit": 50,
+  "next_offset": null
+}</code></pre>
+<p>Times are numeric seconds. Timestamps are ISO 8601. Display names are labels, not keys. Treat IDs and revisions as opaque strings. If revision changes between pages, restart at offset zero to avoid mixing snapshots.</p>
+<h2 id="scoring">Points</h2><p>First: 100. Second: 97. Third: 95. For places 4 onward:</p><pre><code>max(round(94 - (place - 4) * 94 / max(1, total_runners - 3)), 0)</code></pre>
+<p>Rounding matches Python: nearest integer, ties to even. <code>total_runners</code> is the number of distinct players with ranked results across that source before group filtering. Only one fastest run per player per mission counts. Exact unrounded tied times share place and points, with competition ranking (1, 1, 3). Equal point totals share overall rank.</p>
+<p>Speedrun.com uses verified single-player Any% results for Jak 3 OpenGOAL Missions and each subcategory's moderator-defined default; variants are listed on mission responses. Ghost results are completed, non-truncated submissions from the ghost database. They are not independently verified, and their player identities are not linked to Speedrun.com.</p>
+<h2>Cache contract</h2><p>Public result pages send an <code>ETag</code>. Send <code>If-None-Match</code> on repeat requests; a <code>304</code> has no body, so reuse your saved response. Results are fresh for 15 seconds, with a further 30-second stale-while-revalidate allowance. HTML always revalidates; content-hashed assets are immutable. Errors, admin responses, identity requests, and live cache status are <code>no-store</code>.</p>
+<p>Speedrun.com is refreshed hourly in one rate-limited background job. A complete successful snapshot is atomically saved as JSON on disk. Failed or partial refreshes keep the previous snapshot, report staleness, and retry with backoff. A cold cache returns <code>503</code> with <code>Retry-After: 60</code>. The public Refresh button revalidates this service's cache; it does not force a new upstream crawl.</p>
+<p>Ghost rankings are cached from database metadata, never by reparsing replay files on a page request. Submissions, renames, and database deletions invalidate that snapshot; player pings do not. The database remains authoritative: deleting a JSON file alone does not delete its time record.</p>
+<h2>Errors and compatibility</h2><p>Errors have <code>{"error":"message"}</code> with HTTP 400, 404, or 503. Respect <code>Retry-After</code>, retain cached data offline, and label stale results in game. New fields may be added to v1; consumers should ignore fields they do not understand. No permissive browser CORS is enabled; native game clients can access these public endpoints directly.</p>
+<p><a href="https://github.com/speedruncomorg/api/blob/master/version1/leaderboards.md">Speedrun.com API reference</a> · <a href="https://www.rfc-editor.org/rfc/rfc9111.html">HTTP caching standard</a></p></main></body></html>

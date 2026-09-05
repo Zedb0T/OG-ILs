@@ -19,6 +19,9 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
+from leaderboards import Leaderboards, LeaderboardError
+from leaderboard_http import public_route, response_parts
+
 MAX_BYTES = 32 * 1024 * 1024
 IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{1,96}\Z")
 PLAYER_ID = re.compile(r"[a-f0-9]{32}\Z")
@@ -118,6 +121,24 @@ class Store:
               uploaded_at TEXT NOT NULL, path TEXT NOT NULL,
               UNIQUE(player_id, digest));
             CREATE INDEX IF NOT EXISTS by_mission ON replays(game, category, duration_seconds);
+            CREATE INDEX IF NOT EXISTS leaderboard_bests ON replays(game, completed, truncated, category, player_id, duration_seconds);
+            CREATE TABLE IF NOT EXISTS leaderboard_revision (
+              singleton INTEGER PRIMARY KEY CHECK(singleton=1), revision INTEGER NOT NULL,
+              updated_at TEXT NOT NULL);
+            INSERT OR IGNORE INTO leaderboard_revision VALUES (1, 0, strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+            CREATE TRIGGER IF NOT EXISTS leaderboard_insert AFTER INSERT ON replays BEGIN
+              UPDATE leaderboard_revision SET revision=revision+1,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE singleton=1;
+            END;
+            CREATE TRIGGER IF NOT EXISTS leaderboard_delete AFTER DELETE ON replays BEGIN
+              UPDATE leaderboard_revision SET revision=revision+1,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE singleton=1;
+            END;
+            CREATE TRIGGER IF NOT EXISTS leaderboard_update AFTER UPDATE ON replays BEGIN
+              UPDATE leaderboard_revision SET revision=revision+1,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE singleton=1;
+            END;
+            CREATE TRIGGER IF NOT EXISTS leaderboard_name AFTER UPDATE OF display_name ON players
+            WHEN OLD.display_name != NEW.display_name BEGIN
+              UPDATE leaderboard_revision SET revision=revision+1,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE singleton=1;
+            END;
         """)
         # Additive migration: retain existing identities, names, and replay files.
         if "last_ping_at" not in {row[1] for row in self.db.execute("PRAGMA table_info(players)")}:
@@ -133,8 +154,10 @@ class Store:
                     if hashlib.sha256(candidate.read_bytes()).hexdigest() == row["digest"]:
                         candidate.rename(self.root / row["path"])
                         break
+        self.leaderboards = Leaderboards(self)
 
     def close(self):
+        self.leaderboards.speedrun.stop()
         self.db.close()
 
     def authenticate_admin(self, authorization):
@@ -294,6 +317,7 @@ class Store:
 ADMIN_HTML = b'''<!doctype html><meta charset="utf-8"><title>OpenGOAL ghost admin</title>
 <style>body{font:16px system-ui;max-width:1050px;margin:3em auto;padding:0 1em;background:#17202b;color:#eee}input,button{padding:.6em;margin:.3em}code{font-size:12px}.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:.7em;border-bottom:1px solid #435063}time{white-space:nowrap;font-size:14px}</style>
 <h1>Ghost players</h1><p>Sign in to manage display names. Names and readable filenames update together; replay IDs remain unchanged.</p>
+<p><a href="/" style="color:#86dceb">&larr; Public leaderboards</a></p>
 <form id="login"><label>Username <input id="username" name="username" value="user" autocomplete="username" maxlength="128" required></label><label>Password <input id="password" name="password" type="password" autocomplete="current-password" maxlength="256" required></label><button type="submit">Sign in / Load players</button></form><p id="status" role="status"></p>
 <p>Players can press L3 + D-pad Down in game to ping. Last ping refreshes every 5 seconds while this page is visible.</p>
 <div class="table-wrap"><table><thead><tr><th>Player ID</th><th>Display name</th><th>Last ping (your local time)</th><th>Action</th></tr></thead><tbody id="players"></tbody></table></div>
@@ -337,7 +361,13 @@ def route(store, method, target, authorization, player_id, read_body):
     path = parts.path
     if path.startswith("/admin/") and not store.authenticate_admin(authorization):
         raise APIError("Invalid admin username or password", 401)
-    if method == "GET":
+    if method in ("GET", "HEAD"):
+        try:
+            public = public_route(store, target)
+        except LeaderboardError as error:
+            raise APIError(str(error), error.status) from None
+        if public is not None:
+            return public
         if path == "/health":
             return 200, {"ok": True, "api_version": 1}, "application/json"
         if path == "/admin":
@@ -383,13 +413,11 @@ class Handler(BaseHTTPRequestHandler):
         pass  # Never log request credentials or bodies.
 
     def reply(self, status, data, kind="application/json"):
-        raw = data if isinstance(data, bytes) else json.dumps(data, allow_nan=False).encode()
+        status, raw, headers = response_parts(status, data, kind, self.path, self.command,
+                                             self.headers.get("If-None-Match", ""))
         self.send_response(status)
-        self.send_header("Content-Type", kind)
-        self.send_header("Content-Length", str(len(raw)))
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'")
+        for key, value in headers.items():
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(raw)
 
@@ -422,6 +450,7 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(500, {"error": "Storage error; inspect server data directory"})
 
     do_GET = dispatch
+    do_HEAD = dispatch
     do_POST = dispatch
 
 
@@ -457,6 +486,7 @@ def main():
     args = parser.parse_args()
     store = Store(args.data, admin_user=os.environ.get("GHOST_ADMIN_USER", "user"),
                   admin_password=os.environ.get("GHOST_ADMIN_PASSWORD", "pass"))
+    store.leaderboards.speedrun.start()
     with Server(("127.0.0.1", args.port), store) as server:
         print(f"Ghost server: http://127.0.0.1:{server.server_port}   Admin: /admin", flush=True)
         print(f"Data: {store.root}\nAdmin login: username/password (local testing only)", flush=True)

@@ -1,0 +1,657 @@
+[
+  {
+    "mission_id": "arena-training-1",
+    "label": "Complete Arena Training Course",
+    "group": "main"
+  },
+  {
+    "mission_id": "arena-fight-1",
+    "label": "Earn 1st War Amulet",
+    "group": "main"
+  },
+  {
+    "mission_id": "wascity-chase",
+    "label": "Catch Kanga-Rats",
+    "group": "main"
+  },
+  {
+    "mission_id": "wascity-pre-game",
+    "label": "Unlock Satellite",
+    "group": "main"
+  },
+  {
+    "mission_id": "desert-turtle-training",
+    "label": "Learn to Drive a Vehicle",
+    "group": "main"
+  },
+  {
+    "mission_id": "desert-course-race",
+    "label": "Beat Kleiver in Desert Race",
+    "group": "main"
+  },
+  {
+    "mission_id": "desert-artifact-race-1",
+    "label": "Race For Artifacts",
+    "group": "main"
+  },
+  {
+    "mission_id": "wascity-leaper-race",
+    "label": "Beat Monks in Leaper Race",
+    "group": "main"
+  },
+  {
+    "mission_id": "desert-hover",
+    "label": "Destroy Metal Head Beasts",
+    "group": "main"
+  },
+  {
+    "mission_id": "arena-fight-2",
+    "label": "Earn 2nd War Amulet",
+    "group": "main"
+  },
+  {
+    "mission_id": "desert-catch-lizards",
+    "label": "Corral Wild Leapers",
+    "group": "main"
+  },
+  {
+    "mission_id": "desert-rescue",
+    "label": "Rescue Wastelanders",
+    "group": "main"
+  },
+  {
+    "mission_id": "wascity-gungame",
+    "label": "Beat Turret Challenge",
+    "group": "main"
+  },
+  {
+    "mission_id": "arena-fight-3",
+    "label": "Defeat Marauders in Arena",
+    "group": "main"
+  },
+  {
+    "mission_id": "nest-eggs",
+    "label": "Destroy Eggs in Nest",
+    "group": "main"
+  },
+  {
+    "mission_id": "temple-climb",
+    "label": "Climb Monk Temple Tower",
+    "group": "main"
+  },
+  {
+    "mission_id": "desert-glide",
+    "label": "Glide to Volcano",
+    "group": "main"
+  },
+  {
+    "mission_id": "volcano-darkeco",
+    "label": "Find Satellite in Volcano",
+    "group": "main"
+  },
+  {
+    "mission_id": "temple-oracle",
+    "label": "Find Oracle in Monk Temple",
+    "group": "main"
+  },
+  {
+    "mission_id": "desert-oasis-defense",
+    "label": "Defend Ashelin at Oasis",
+    "group": "main"
+  },
+  {
+    "mission_id": "temple-tests",
+    "label": "Complete Monk Temple Tests",
+    "group": "main"
+  },
+  {
+    "mission_id": "comb-travel",
+    "label": "Travel Through Catacomb Subrails",
+    "group": "main"
+  },
+  {
+    "mission_id": "mine-explore",
+    "label": "Explore Eco Mine",
+    "group": "main"
+  },
+  {
+    "mission_id": "mine-blow",
+    "label": "Escort Bomb Train",
+    "group": "main"
+  },
+  {
+    "mission_id": "mine-boss",
+    "label": "Defeat Veger's Precursor Robot",
+    "group": "main"
+  },
+  {
+    "mission_id": "sewer-met-hum",
+    "label": "Reach Port via Sewer",
+    "group": "main"
+  },
+  {
+    "mission_id": "city-port-fight",
+    "label": "Destroy Incoming Blast Bots",
+    "group": "main"
+  },
+  {
+    "mission_id": "city-port-attack",
+    "label": "Destroy Barrier With Missile",
+    "group": "main"
+  },
+  {
+    "mission_id": "city-gun-course-1",
+    "label": "Beat Gun Course 1",
+    "group": "main"
+  },
+  {
+    "mission_id": "city-sniper-fight",
+    "label": "Destroy Sniper Cannons",
+    "group": "main"
+  },
+  {
+    "mission_id": "sewer-kg-met",
+    "label": "Reach Metal Head Area via Sewer",
+    "group": "main"
+  },
+  {
+    "mission_id": "city-destroy-darkeco",
+    "label": "Destroy Dark Eco Tanks",
+    "group": "main"
+  },
+  {
+    "mission_id": "forest-kill-plants",
+    "label": "Kill Dark Plants in Forest",
+    "group": "main"
+  },
+  {
+    "mission_id": "city-destroy-grid",
+    "label": "Destroy Eco Grid With Jinx",
+    "group": "main"
+  },
+  {
+    "mission_id": "city-hijack-vehicle",
+    "label": "Hijack Eco Vehicle",
+    "group": "main"
+  },
+  {
+    "mission_id": "city-port-assault",
+    "label": "Defend Port From Attack",
+    "group": "main"
+  },
+  {
+    "mission_id": "city-gun-course-2",
+    "label": "Beat Gun Course 2",
+    "group": "main"
+  },
+  {
+    "mission_id": "city-blow-barricade",
+    "label": "Break Barrier with Blast Bot",
+    "group": "main"
+  },
+  {
+    "mission_id": "city-protect-hq",
+    "label": "Defend HQ From Attack",
+    "group": "main"
+  },
+  {
+    "mission_id": "sewer-hum-kg",
+    "label": "Find Switch in Sewers",
+    "group": "main"
+  },
+  {
+    "mission_id": "city-power-game",
+    "label": "Find Cypher In Eco Grid",
+    "group": "main"
+  },
+  {
+    "mission_id": "desert-artifact-race-2",
+    "label": "Race For More Artifacts",
+    "group": "main"
+  },
+  {
+    "mission_id": "nest-hunt",
+    "label": "Destroy Metal-pedes in Nest",
+    "group": "main"
+  },
+  {
+    "mission_id": "desert-beast-battle",
+    "label": "Chase Down Metal Head Beasts",
+    "group": "main"
+  },
+  {
+    "mission_id": "desert-jump-mission",
+    "label": "Defend Spargus' Front Gate",
+    "group": "main"
+  },
+  {
+    "mission_id": "desert-chase-marauders",
+    "label": "Take Out Marauder Stronghold",
+    "group": "main"
+  },
+  {
+    "mission_id": "forest-ring-chase",
+    "label": "Beat Pillar Ring Challenges",
+    "group": "main"
+  },
+  {
+    "mission_id": "factory-sky-battle",
+    "label": "Destroy War Factory Defenses",
+    "group": "main"
+  },
+  {
+    "mission_id": "factory-assault",
+    "label": "Explore War Factory",
+    "group": "main"
+  },
+  {
+    "mission_id": "factory-boss",
+    "label": "Beat Cyber-Errol Boss",
+    "group": "main"
+  },
+  {
+    "mission_id": "temple-defend",
+    "label": "Rescue Seem at Temple",
+    "group": "main"
+  },
+  {
+    "mission_id": "wascity-defend",
+    "label": "Defend Spargus From Attack",
+    "group": "main"
+  },
+  {
+    "mission_id": "forest-turn-on-machine",
+    "label": "Activate Astro-Viewer in Forest",
+    "group": "main"
+  },
+  {
+    "mission_id": "precursor-tour",
+    "label": "Destroy Dark Ship Shield",
+    "group": "main"
+  },
+  {
+    "mission_id": "city-blow-tower",
+    "label": "Blow Open Tower Door",
+    "group": "main"
+  },
+  {
+    "mission_id": "tower-destroy",
+    "label": "Destroy Metal Head Tower",
+    "group": "main"
+  },
+  {
+    "mission_id": "palace-ruins-patrol",
+    "label": "Reach Catacombs via Palace Ruins",
+    "group": "main"
+  },
+  {
+    "mission_id": "palace-ruins-patrol-w-bbush",
+    "label": "Reach Catacombs via Palace Ruins (w/ Side Mission)",
+    "group": "main"
+  },
+  {
+    "mission_id": "palace-ruins-attack",
+    "label": "Break Through Ruins",
+    "group": "main"
+  },
+  {
+    "mission_id": "palace-ruins-attack-w-bbush",
+    "label": "Break Through Ruins (w/ Side Mission)",
+    "group": "main"
+  },
+  {
+    "mission_id": "comb-wild-ride",
+    "label": "Reach Precursor Core",
+    "group": "main"
+  },
+  {
+    "mission_id": "precursor-destroy-ship",
+    "label": "Destroy Dark Ship",
+    "group": "main"
+  },
+  {
+    "mission_id": "terraformer",
+    "label": "Terraformer",
+    "group": "main"
+  },
+  {
+    "mission_id": "desert-final-boss",
+    "label": "Destroy Final Boss",
+    "group": "main"
+  },
+  {
+    "mission_id": "wascity-bbush-get-to-18",
+    "label": "Orb Search 18 (Spargus E)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "desert-bbush-get-to-19",
+    "label": "Orb Search 19 (Spargus E)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "wascity-bbush-get-to-20",
+    "label": "Orb Search 20 (Spargus E)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "wascity-bbush-get-to-21",
+    "label": "Orb Search 21 (Spargus E)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "wascity-bbush-get-to-22",
+    "label": "Orb Search 22 (Spargus W)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "wascity-bbush-get-to-23",
+    "label": "Orb Search 23 (Spargus W)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "wascity-bbush-get-to-24",
+    "label": "Orb Search 24 (Spargus W)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "wascity-bbush-get-to-25",
+    "label": "Orb Search 25 (Spargus W)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "wascity-bbush-ring-3",
+    "label": "Ring Race 3 (Spargus W)",
+    "group": "side"
+  },
+  {
+    "mission_id": "wascity-bbush-ring-4",
+    "label": "Ring Race 4 (Spargus E)",
+    "group": "side"
+  },
+  {
+    "mission_id": "wascity-bbush-spirit-chase-2",
+    "label": "Spirit Chase 2 (Spargus)",
+    "group": "side"
+  },
+  {
+    "mission_id": "wascity-bbush-timer-chase-2",
+    "label": "Timer Race 2 (Spargus)",
+    "group": "side"
+  },
+  {
+    "mission_id": "wascity-gungame-2",
+    "label": "Turret Challenge (Gold)",
+    "group": "side"
+  },
+  {
+    "mission_id": "desert-bbush-get-to-1",
+    "label": "Orb Search 1 (Wasteland NE)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "desert-bbush-get-to-2",
+    "label": "Orb Search 2 (Wasteland W)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "desert-bbush-get-to-3",
+    "label": "Orb Search 3 (Wasteland NW)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "desert-bbush-get-to-4",
+    "label": "Orb Search 4 (Wasteland SE)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "desert-bbush-get-to-5",
+    "label": "Orb Search 5 (Wasteland SE)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "desert-bbush-get-to-6",
+    "label": "Orb Search 6 (Wasteland W)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "desert-bbush-get-to-7",
+    "label": "Orb Search 7 (Wasteland SW)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "desert-bbush-get-to-8",
+    "label": "Orb Search 8 (Wasteland NE)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "desert-bbush-get-to-9",
+    "label": "Orb Search 9 (Wasteland N)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "desert-bbush-get-to-11",
+    "label": "Orb Search 11 (Wasteland SE)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "desert-bbush-get-to-12",
+    "label": "Orb Search 12 (Wasteland E)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "desert-bbush-get-to-14",
+    "label": "Orb Search 14 (Wasteland SW)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "desert-bbush-get-to-16",
+    "label": "Orb Search 16 (Wasteland E)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "desert-bbush-get-to-17",
+    "label": "Orb Search 17 (Wasteland NE)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "desert-bbush-ring-1",
+    "label": "Ring Race 1 (Wasteland SE)",
+    "group": "side"
+  },
+  {
+    "mission_id": "desert-bbush-ring-2",
+    "label": "Ring Race 2 (Wasteland SW)",
+    "group": "side"
+  },
+  {
+    "mission_id": "desert-bbush-egg-spider-1",
+    "label": "Pod Spider Hunt",
+    "group": "side"
+  },
+  {
+    "mission_id": "desert-bbush-spirit-chase-1",
+    "label": "Spirit Chase 1 (Wasteland)",
+    "group": "side"
+  },
+  {
+    "mission_id": "desert-bbush-timer-chase-1",
+    "label": "Timer Race 1 (Wasteland)",
+    "group": "side"
+  },
+  {
+    "mission_id": "desert-bbush-time-trial-1",
+    "label": "Wasteland Racetrack Time Trial",
+    "group": "side"
+  },
+  {
+    "mission_id": "desert-bbush-rally",
+    "label": "Wasteland Rally",
+    "group": "side"
+  },
+  {
+    "mission_id": "desert-rescue-bbush",
+    "label": "Rescue More Wastelanders",
+    "group": "side"
+  },
+  {
+    "mission_id": "desert-bbush-air-time",
+    "label": "Single Hang Time (Gold)",
+    "group": "side"
+  },
+  {
+    "mission_id": "desert-bbush-total-air-time",
+    "label": "Total Hang Time (Gold)",
+    "group": "side"
+  },
+  {
+    "mission_id": "desert-bbush-jump-distance",
+    "label": "Single Distance (Gold)",
+    "group": "side"
+  },
+  {
+    "mission_id": "desert-bbush-total-jump-distance",
+    "label": "Total Distance (Gold)",
+    "group": "side"
+  },
+  {
+    "mission_id": "desert-bbush-roll-count",
+    "label": "Roll Challenge (Gold)",
+    "group": "side"
+  },
+  {
+    "mission_id": "desert-bbush-destroy-interceptors",
+    "label": "Destroy Marauders (Gold)",
+    "group": "side"
+  },
+  {
+    "mission_id": "wascity-pre-game-2",
+    "label": "Satellite (Gold)",
+    "group": "side"
+  },
+  {
+    "mission_id": "city-bbush-get-to-26",
+    "label": "Orb Search 26 (Main Town Ruins)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "city-bbush-get-to-27",
+    "label": "Orb Search 27 (New Haven S)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "city-bbush-get-to-28",
+    "label": "Orb Search 28 (Main Town Ruins)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "city-bbush-get-to-29",
+    "label": "Orb Search 29 (Main Town Ruins)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "city-bbush-get-to-30",
+    "label": "Orb Search 30 (Main Town Ruins)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "city-bbush-get-to-31",
+    "label": "Orb Search 31 (New Haven S)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "city-bbush-get-to-32",
+    "label": "Orb Search 32 (New Haven N)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "city-bbush-get-to-33",
+    "label": "Orb Search 33 (New Haven N)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "city-bbush-get-to-34",
+    "label": "Orb Search 34 (Slums)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "city-bbush-get-to-35",
+    "label": "Orb Search 35 (Slums)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "city-bbush-get-to-36",
+    "label": "Orb Search 36 (Industrial N)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "city-bbush-get-to-37",
+    "label": "Orb Search 37 (Industrial N)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "city-bbush-get-to-38",
+    "label": "Orb Search 38 (Industrial S)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "city-bbush-get-to-39",
+    "label": "Orb Search 39 (Industrial S)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "city-bbush-get-to-40",
+    "label": "Orb Search 40 (Industrial S)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "city-bbush-get-to-41",
+    "label": "Orb Search 41 (Port)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "city-bbush-get-to-42",
+    "label": "Orb Search 42 (Port)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "city-bbush-get-to-43",
+    "label": "Orb Search 43 (Port)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "city-bbush-get-to-44",
+    "label": "Orb Search 44 (Port)",
+    "group": "orb"
+  },
+  {
+    "mission_id": "city-bbush-ring-5",
+    "label": "Ring Race 5 (New Haven S)",
+    "group": "side"
+  },
+  {
+    "mission_id": "city-bbush-ring-6",
+    "label": "Ring Race 6 (Industrial S)",
+    "group": "side"
+  },
+  {
+    "mission_id": "city-bbush-spirit-chase-3",
+    "label": "Spirit Chase 3 (Slums)",
+    "group": "side"
+  },
+  {
+    "mission_id": "city-bbush-port-attack",
+    "label": "Port Missile Challenge",
+    "group": "side"
+  },
+  {
+    "mission_id": "city-jetboard-bbush",
+    "label": "JET-Board Challenge (Gold)",
+    "group": "side"
+  },
+  {
+    "mission_id": "city-power-game-2",
+    "label": "Eco Grid (Gold)",
+    "group": "side"
+  }
+]

@@ -33,6 +33,49 @@ to use the newly selected server's ghosts. Custom selections and downloaded
 replay caches are separate per server; existing uploads finish on their original
 server. The menu does not start a local server—run the command above first.
 
+## Public points leaderboards
+
+The default `/` page is the public leaderboard, with **Speedrun.com** selected
+and an **Uploaded ghosts** source dropdown. It includes mission-group filters,
+player and mission drill-downs, pagination, and links to `/admin` and `/api`.
+The two sources use independent player/mission IDs and never combine standings.
+Speedrun.com uses Jak 3 OpenGOAL Missions, Any%, verified single-player runs,
+and each applicable subcategory's default value. Uploaded ghosts are explicitly
+labelled unverified community submissions.
+
+Scoring matches the supplied points system: 100/97/95 for the podium, then
+`max(round(94 - (place - 4) * 94 / max(1, total_runners - 3)), 0)`.
+`total_runners` counts distinct ranked players across the selected source before
+group filtering. Only each player's fastest eligible run per mission counts.
+Exact-time ties share place/points (1, 1, 3); equal point totals share overall rank.
+
+Read-only JSON endpoints, suitable for a future in-game browser:
+
+- `/api/v1/leaderboards/points`
+- `/api/v1/missions`
+- `/api/v1/missions/{mission_id}/leaderboard`
+- `/api/v1/players/{player_id}`
+- `/api/v1/scoring` and `/api/v1/status`
+
+Use `source=speedrun|ghosts`, `game=jak3`, `group=all|main|orb|side`,
+`offset=0`, and `limit=50` (maximum 100). Responses include a snapshot revision,
+UTC update time, and pagination. See `/api` for schemas and examples.
+This adds the API, not the future in-game leaderboard UI.
+
+Speedrun.com refreshes hourly in one background worker, paced at 48 requests
+per minute. Page views never trigger upstream crawls. A complete last-good
+snapshot is atomically persisted to `data/speedrun-leaderboard-v1.json` and
+survives restarts; failed/partial refreshes keep it intact and back off. A cold
+cache returns 503 with retry guidance while the first crawl completes.
+Ghost metadata is cached separately and invalidated on replay or name changes,
+including SQL deletion; player pings do not invalidate it. The SQLite index is
+authoritative: deleting a replay JSON alone does not remove its recorded time.
+
+Public JSON uses ETags and a 15-second HTTP cache; hashed CSS/JS assets are
+immutable. Status, admin, credentials, errors, and legacy client endpoints stay
+`no-store`. The response LRU is capped at 64 entries / 8 MiB and the persisted SRC
+cache at 8 MiB; replay sample payloads never enter leaderboard caches.
+
 ## Player ping
 
 The bottom-left gameplay HUD says **Undetected player - Press L3 + D-pad Down

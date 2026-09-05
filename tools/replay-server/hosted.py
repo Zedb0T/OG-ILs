@@ -8,6 +8,7 @@ from http import HTTPStatus
 from urllib.parse import urlsplit
 
 from server import APIError, Store, require, route
+from leaderboard_http import response_parts
 
 MIB = 1024 * 1024
 BODY_LIMIT = 4 * MIB  # Start small for the 300 MB service; reject larger files explicitly.
@@ -30,8 +31,12 @@ class Application:
             require(env.get("HTTP_ORIGIN", self.origin) == self.origin, "Cross-origin requests are not allowed")
             path = env.get("PATH_INFO", "")
             method = env["REQUEST_METHOD"]
-            # Health remains responsive while a replay is being parsed/written.
-            if path != "/health":
+            # Cheap public reads must not contend for the upload semaphore (the
+            # browser requests CSS/JS concurrently). Waitress still bounds threads
+            # and connections; leaderboard queries use the store's metadata lock.
+            public_read = method in ("GET", "HEAD") and (
+                path in ("/", "/api") or path.startswith(("/assets/", "/api/v1/")))
+            if path != "/health" and not public_read:
                 acquired = self.slot.acquire(blocking=False)
                 if not acquired:
                     raise APIError("Server busy; retry shortly", 503)
@@ -59,13 +64,9 @@ class Application:
         finally:
             if acquired:
                 self.slot.release()
-        raw = data if isinstance(data, bytes) else json.dumps(data, allow_nan=False).encode()
-        headers = [("Content-Type", kind), ("Content-Length", str(len(raw))),
-                   ("Cache-Control", "no-store"), ("X-Content-Type-Options", "nosniff"),
-                   ("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'")]
-        if status == 503:
-            headers.append(("Retry-After", "1"))
-        start_response(f"{status} {HTTPStatus(status).phrase}", headers)
+        status, raw, headers = response_parts(status, data, kind, env.get("PATH_INFO", ""),
+                                              env.get("REQUEST_METHOD", "GET"), env.get("HTTP_IF_NONE_MATCH", ""))
+        start_response(f"{status} {HTTPStatus(status).phrase}", list(headers.items()))
         return [raw]
 
 
@@ -76,6 +77,7 @@ def main():
     data = Path(os.environ.get("GHOST_DATA", "/home/container/data"))
     # Config/data live outside downloaded releases and are never replaced on restart.
     store = Store(data, config["admin_user"], config["admin_password"])
+    store.leaderboards.speedrun.start()
     app = Application(store, config["public_origin"], int(config.get("disk_budget_mb", 128)) * MIB)
     print("Ghost service starting; HTTPS origin:", app.origin, flush=True)
     print("Limits: one active replay request, 4 MiB uploads, persistent data:", store.root, flush=True)
