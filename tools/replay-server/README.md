@@ -36,16 +36,22 @@ server. The menu does not start a local server—run the command above first.
 ## Player ping
 
 The bottom-left gameplay HUD says **Undetected player - Press L3 + D-pad Down
-to ping server** until a successful ping returns an admin-assigned name. Hold
-L3 and tap D-pad Down (either press order works). A ping uses the selected
+to ping server** until a successful ping returns an admin-assigned name, then
+**Welcome back NAME**. The game automatically pings when the gameplay HUD first
+starts and after switching servers. It displays **Detecting player...** while
+waiting. Hold L3 and tap D-pad Down to refresh manually (either press order works).
+A ping uses the selected
 server, registers the saved player ID on first contact, and returns its current
 display name. Requests run off the game thread, with a pending-request guard
 and a three-second cooldown. Switching servers resets the displayed identity
-until the next ping; it does not change the saved ID or token.
+until its automatic ping finishes; it does not change the saved ID or token.
+Localhost and SparkedHost have separate name mappings: edit the dashboard for
+the endpoint selected under **Settings → Ghost Server**. Failed checks can be
+retried manually; they do not erase a name already verified on that endpoint.
 
 The admin player table includes **Last ping (your local time)** and refreshes
 every five seconds while visible, without discarding unsaved name edits.
-`Never` means no explicit ping has been received. The authenticated
+`Never` means no automatic or manual ping has been received. The authenticated
 `POST /players/ping` body has `player_id` and `token`; timestamps are generated
 by the server in UTC and survive restarts. Existing databases gain a nullable
 `last_ping_at` column without replacing players or replay files. Uploads alone

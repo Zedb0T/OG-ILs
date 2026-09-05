@@ -64,8 +64,10 @@
 (define *replay-player-ping-status* (new 'global 'string 256 (the-as string #f)))
 
 (defun replay-player-ping-update! ()
-  "Manual player identification/presence ping, independent of mission recording."
+  "Boot and manual player identification, independent of mission recording."
   (when (and (= *master-mode* 'game) *target*)
+    ;; Native code sends this only once, and rearms it when the server changes.
+    (pc-replay-client-command 17 0 "")
     ;; Either order works; held buttons do not fire repeatedly. The native
     ;; worker also debounces pending requests and imposes a short cooldown.
     (when (or (and (cpad-hold? 0 l3) (cpad-pressed? 0 down))

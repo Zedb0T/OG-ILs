@@ -1,9 +1,51 @@
 #include <chrono>
+#include <cstdlib>
 #include <thread>
 
 #include "game/system/replay_client.h"
 #include "gtest/gtest.h"
 #include "third-party/json.hpp"
+
+TEST(ReplayClient, BootIdentityFromSelectedServer) {
+  // Only the Python loopback harness may enable this test. It supplies a fresh
+  // profile and fake credentials; never ping the user's servers from a test.
+  const auto* profile = std::getenv("OG_REPLAY_TEST_PROFILE");
+  if (!profile) GTEST_SKIP() << "Run tools/replay-server/test_client_identity.py";
+  file_util::override_user_config_dir(fs::path(profile), true);
+  const auto saved = nlohmann::json::parse(file_util::read_text_file(
+      file_util::get_user_features_dir(GameVersion::Jak3) / "ghost-client.json"));
+  ASSERT_EQ(replay_client::server_status().url, saved.at("server").get<std::string>());
+  auto wait_for_ping = [] {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (replay_client::text(5, 0) == "Pinging server..." &&
+           std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    ASSERT_NE(replay_client::text(5, 0), "Pinging server...");
+  };
+  ASSERT_EQ(replay_client::command(17, 0, ""), 1);
+  wait_for_ping();
+  EXPECT_EQ(replay_client::text(4, 0), "Welcome back Zed");
+  // Per-frame calls must not spam requests.
+  for (int i = 0; i < 1000; ++i) EXPECT_EQ(replay_client::command(17, 0, ""), 0);
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(3100));
+  ASSERT_EQ(replay_client::command(16, 0, ""), 1);
+  wait_for_ping();
+  EXPECT_EQ(replay_client::text(4, 0), "Welcome back Zed");
+  EXPECT_EQ(replay_client::text(5, 0), "Ping failed: Ghost server rejected request (503)");
+  EXPECT_EQ(replay_client::command(17, 0, ""), 0); // no automatic retry loop
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(3100));
+  ASSERT_EQ(replay_client::command(16, 0, ""), 1);
+  wait_for_ping();
+  EXPECT_EQ(replay_client::text(4, 0), "Welcome back New_Name"); // sanitize GOAL directives
+
+  // Switching clears the old server's name. Do not tick the new endpoint: this
+  // harness deliberately never sends a fake identity to the public service.
+  ASSERT_TRUE(replay_client::set_server(replay_client::Server::SparkedHost));
+  EXPECT_EQ(replay_client::text(4, 0), "Undetected player - Press L3 + D-pad Down to ping server");
+  EXPECT_TRUE(replay_client::text(5, 0).empty());
+}
 
 TEST(ReplayClient, ServerSelectionPersistsWithoutChangingIdentityOrRaceMode) {
   // No HTTP jobs: an empty category is intentionally invalid. Never touch the

@@ -190,8 +190,9 @@ class Client {
     const auto server = base;
     const auto generation = server_revision;
     enqueue([this, server, generation] {
+      { std::lock_guard lock(mutex); if (generation != server_revision) return; }
       std::string name, result_status;
-      bool identified = false;
+      bool identified = false, received_identity = false;
       try {
         const auto reply = json::parse(request(server, "/players/ping",
             json({{"player_id", player}, {"token", token}}).dump()));
@@ -202,6 +203,7 @@ class Client {
         // Server-controlled names must never become GOAL text directives.
         for (auto& ch : name) if (ch < 32 || ch > 126 || ch == '~') ch = '_';
         if (name.size() > 40) name.resize(40);
+        received_identity = true;
         result_status = identified ? "Ping sent" : "Ping sent - waiting for an admin to assign your name";
       } catch (const std::exception& error) {
         result_status = std::string("Ping failed: ") + error.what();
@@ -209,10 +211,15 @@ class Client {
       std::lock_guard lock(mutex);
       if (generation != server_revision) return;
       ping_pending = false;
-      player_identified = identified;
-      player_name = std::move(name);
+      // A transient network error must not erase a name already verified on
+      // this server. A successful unknown response still clears a removed name.
+      if (received_identity) {
+        player_identified = identified;
+        player_name = std::move(name);
+      }
       ping_status = std::move(result_status);
     });
+    identity_requested = true;
     ping_pending = true;
     next_ping = now + std::chrono::seconds(3);
     ping_status = "Pinging server...";
@@ -336,7 +343,7 @@ class Client {
   json config, catalog = json::array();
   std::string player, token, base, prepared_category, status = "Ready";
   std::string player_name, ping_status;
-  bool player_identified = false, ping_pending = false;
+  bool player_identified = false, ping_pending = false, identity_requested = false;
   std::chrono::steady_clock::time_point next_ping{};
   std::vector<Ghost> prepared;
   int mode = 0, page = 0, revision = 0, server_revision = 0;
@@ -383,6 +390,7 @@ bool set_server(Server server) {
     ++c.server_revision;
     c.player_name.clear();
     c.player_identified = false;
+    c.identity_requested = false;
     c.ping_pending = false;
     c.ping_status.clear();
     c.next_ping = {};
@@ -440,6 +448,9 @@ int command(int operation, int value, const std::string& category) {
         c.config["custom"][category] = json::array();
         save_json(c.config_path, c.config); c.refresh(category, true); return 1;
       case 16: return c.ping() ? 1 : 0;
+      // Called every HUD frame: contact the selected server once per session
+      // or server change, not every mission retry. Manual ping can retry errors.
+      case 17: return !c.identity_requested && c.ping() ? 1 : 0;
       default: return 0;
     }
   } catch (const std::exception& e) { lg::warn("replay client: {}", e.what()); return 0; }
@@ -450,8 +461,9 @@ std::string text(int operation, int index) {
     auto& c = client(); std::lock_guard lock(c.mutex);
     if (operation == 0) return c.status;
     if (operation == 3) return "Unknown / ID " + c.player;
-    if (operation == 4) return (c.player_identified ? "Player: " + c.player_name : "Undetected player") +
-                              std::string(" - Press L3 + D-pad Down to ping server");
+    if (operation == 4) return c.player_identified ? "Welcome back " + c.player_name :
+                              c.ping_pending ? "Detecting player..." :
+                              "Undetected player - Press L3 + D-pad Down to ping server";
     if (operation == 5) return c.ping_status;
     if (operation == 1 && index >= 0 && index < static_cast<int>(c.catalog.size())) {
       const auto& row = c.catalog.at(index);
