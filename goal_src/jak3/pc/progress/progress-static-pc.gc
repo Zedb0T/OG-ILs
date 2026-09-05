@@ -858,8 +858,77 @@ This gives us more freedom to write code how we want.
           (set! (-> *pc-settings* fix-projectile-focus) val)
           (pc-settings-save))))
 
+(define-extern pc-replay-client-command (function int int string int))
+(define-extern pc-replay-client-text (function int int string symbol))
+(define *ghost-menu-label* (new 'global 'string 256 (the-as string #f)))
+(define *ghost-browser-index* 0)
+(defun ghost-menu-command ((op int) (value int))
+  (pc-replay-client-command op value
+    (enum->string speedrun-category (-> *speedrun-info* category))))
+
+(defmacro ghost-replay-options ()
+  `(progress-new-generic-scrolling-page (text-id progress-ghost-replays)
+    (new 'static 'menu-generic-carousel-option
+      :name (text-id progress-ghost-mode)
+      :get-max-size-fn (lambda () 5)
+      :get-item-index-fn (lambda () (ghost-menu-command 0 0))
+      :get-item-label-fn (lambda ((index int))
+        (case index
+          ((0) "Default - Next Faster Ghost")
+          ((1) "Race vs Your Best Time")
+          ((2) "Race vs WR")
+          ((3) "Race vs Your Last Attempt")
+          (else "Custom - Selected Replays")))
+      :on-confirm (lambda ((index int) (the-progress progress))
+        (set! *ghost-browser-index* 0)
+        (ghost-menu-command 1 index) (none)))
+    (new 'static 'menu-generic-carousel-option
+      :name (text-id progress-ghost-status)
+      :get-max-size-fn (lambda () 1)
+      :get-item-index-fn (lambda () 0)
+      :get-item-label-fn (lambda ((index int))
+        (pc-replay-client-text 0 0 *ghost-menu-label*) *ghost-menu-label*)
+      :on-confirm (lambda ((index int) (the-progress progress)) (none)))
+    (new 'static 'menu-generic-button-option
+      :name (text-id progress-ghost-refresh)
+      :on-confirm (lambda ((the-progress progress))
+        (set! *ghost-browser-index* 0) (ghost-menu-command 2 0) (none)))
+    (new 'static 'menu-generic-carousel-option
+      :name (text-id progress-ghost-browser)
+      :get-max-size-fn (lambda () (max 1 (ghost-menu-command 3 0)))
+      :get-item-index-fn (lambda () *ghost-browser-index*)
+      :get-item-label-fn (lambda ((index int))
+        (pc-replay-client-text 1 index *ghost-menu-label*) *ghost-menu-label*)
+      :on-confirm (lambda ((index int) (the-progress progress))
+        (set! *ghost-browser-index* index) (none)))
+    (new 'static 'menu-generic-button-option
+      :name (text-id progress-ghost-toggle)
+      :on-confirm (lambda ((the-progress progress))
+        (ghost-menu-command 5 *ghost-browser-index*) (none)))
+    (new 'static 'menu-generic-button-option
+      :name (text-id progress-ghost-next)
+      :on-confirm (lambda ((the-progress progress))
+        (set! *ghost-browser-index* 0) (ghost-menu-command 8 0) (none)))
+    (new 'static 'menu-generic-button-option
+      :name (text-id progress-ghost-prev)
+      :on-confirm (lambda ((the-progress progress))
+        (set! *ghost-browser-index* 0) (ghost-menu-command 9 0) (none)))
+    (new 'static 'menu-generic-button-option
+      :name (text-id progress-ghost-submit-pb)
+      :on-confirm (lambda ((the-progress progress)) (ghost-menu-command 6 0) (none)))
+    (new 'static 'menu-generic-button-option
+      :name (text-id progress-ghost-submit-last)
+      :on-confirm (lambda ((the-progress progress)) (ghost-menu-command 7 0) (none)))
+    (new 'static 'menu-generic-boolean-option
+      :name (text-id progress-ghost-auto-submit)
+      :truthy-text (text-id progress-on)
+      :falsey-text (text-id progress-off)
+      :get-value-fn (lambda () (!= (ghost-menu-command 10 0) 0))
+      :on-confirm (lambda ((val symbol)) (ghost-menu-command 11 (if val 1 0)) (none)))))
+
 (define *game-options-pc*
   (progress-new-generic-scrolling-page (text-id progress-game-options)
+    (progress-new-generic-link (text-id progress-ghost-replays) (ghost-replay-options))
     (game-options-pc-mod-options)
     (game-options-pc-input-options)
     (game-options-pc-subtitle-toggle)

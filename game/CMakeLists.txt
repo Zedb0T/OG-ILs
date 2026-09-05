@@ -95,6 +95,7 @@ set(RUNTIME_SOURCE
         graphics/texture/TexturePool.cpp
         ${OG_ASM_FUNCS_FILE}
         kernel/common/fileio.cpp
+        system/replay_client.cpp
         kernel/common/kboot.cpp
         kernel/common/kdgo.cpp
         kernel/common/kdsnetm.cpp

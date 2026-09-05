@@ -84,7 +84,7 @@ u64 pc_replay_recording_finish(u32 completed_symbol);
 u64 pc_replay_recording_active();
 s64 pc_replay_recording_count();
 
-// One immutable local PB used by the GOAL ghost drawable. This storage never
+// Immutable replay snapshots used by the GOAL ghost drawables. This storage never
 // aliases the recorder and contains no GOAL or streamed-art pointers.
 s64 pc_replay_playback_start(u32 category_ptr);
 u64 pc_replay_playback_sample_transform(s64 sample_index, u32 position_ptr, u32 rotation_ptr);
@@ -101,6 +101,8 @@ u64 pc_replay_playback_sample_extra_metadata(s64 sample_index,
                                              u32 animation_info_ptr,
                                              u32 scale_ptr);
 u64 pc_replay_playback_stop();
+s64 pc_replay_client_command(s64 operation, s64 value, u32 category_ptr);
+u64 pc_replay_client_text(s64 operation, s64 index, u32 destination_ptr);
 
 struct DiscordInfo {
   float orb_count;          // float

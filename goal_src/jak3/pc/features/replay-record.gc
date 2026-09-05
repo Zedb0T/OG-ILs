@@ -19,6 +19,7 @@
 (define-extern replay-ghost-start! (function none))
 (define-extern replay-ghost-stop! (function none))
 (define-extern replay-ghost-update! (function none))
+(define-extern *replay-ghost-stress-active?* symbol)
 
 (defun replay-record-extra! ((extra process-drawable))
   "Attach one separately rendered player mount to the most recent sample."
@@ -49,6 +50,7 @@
 
 (defun replay-record-start! ((start-time time-frame))
   "Start on the canonical IL timer edge with the timer's exact clock origin."
+  (when *replay-ghost-stress-active?* (return #f))
   ;; A mission's built-in retry can restart the timer without passing through
   ;; speedrun-info.start-run!. Close any surviving attempt here as a final
   ;; lifecycle boundary, then replace its drawable and playback snapshot.
@@ -63,6 +65,7 @@
 
 (defun replay-record-frame! ()
   "Capture one bounded sample. All native storage is allocated once and reused."
+  (when *replay-ghost-stress-active?* (return #f))
   ;; The speedrun manager continues updating through pause/menu modes. Use it
   ;; to retire streamed-art references before those modes can invalidate a
   ;; ghost animation channel, then restore playback at the current sample when
@@ -124,6 +127,7 @@
 
 (defun replay-record-stop! ((completed? symbol))
   "Atomically save the attempt if recording is active."
+  (when *replay-ghost-stress-active?* (return #f))
   ;; The ghost skeleton references current level art. Always destroy it before
   ;; any finish/reset/failure path can begin unloading that art.
   (replay-ghost-stop!)

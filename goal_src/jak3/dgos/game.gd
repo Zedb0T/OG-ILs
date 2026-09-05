@@ -352,7 +352,9 @@
   "popup-menu.o" ;; added
   "speedruns.o" ;; added
   "replay-record.o" ;; bounded local replay recording
-  "replay-ghost.o" ;; one local PB ghost
+  "replay-ghost.o" ;; independent local PB ghost instances
+  ;; "replay-service-test.o" ;; opt-in isolated service integration harness
+  ;; "replay-ghost-stress.o" ;; opt-in dedicated-runtime stress harness
   ;; "phase0-smoke-test.o" ;; opt-in Phase 0 lifecycle reference harness
   ;; "phase1-record-test.o" ;; opt-in Phase 1 recording stress harness
   "drawable.o"

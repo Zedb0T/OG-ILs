@@ -294,5 +294,16 @@
   "152c": "Bottom Right",
   "152d": "Bottom Left",
   "152e": "Show PB",
-  "152f": "Show WR"
+  "152f": "Show WR",
+  "1530": "Ghost Replays",
+  "1531": "Race Mode",
+  "1532": "Server Status",
+  "1533": "Refresh Mission Replays",
+  "1534": "Custom Replay Browser",
+  "1535": "Toggle Selected Replay (Max 8)",
+  "1536": "Next Replay Page",
+  "1537": "Previous Replay Page",
+  "1538": "Submit Your Best Time",
+  "1539": "Submit Your Last Attempt",
+  "153a": "Auto Submit Completed Runs"
 }

@@ -1,0 +1,143 @@
+;; Opt-in retail stress harness. No automatic run and no replay file writes.
+(in-package goal)
+
+(define *replay-ghost-stress-cycles* 1)
+(define *replay-ghost-stress-camera-original* (the-as (function vector) #f))
+(defun replay-ghost-stress-camera-pos ()
+  (let ((ghost (the-as replay-ghost-player
+                 (replay-ghost-resolve (-> *replay-ghost-slots* players 0)))))
+    (if ghost
+        (-> ghost root trans)
+        (*replay-ghost-stress-camera-original*))))
+
+(defun replay-ghost-stress-run! ((count int))
+  (when (or (< count 1) (> count 150) *replay-ghost-stress-active?*
+            (pc-replay-recording-active?))
+    (format 0 "GHOST-STRESS: ERROR invalid count or active recording/test~%")
+    (return #f))
+  (set! *replay-ghost-stress-active?* #t)
+  (set! *replay-ghost-count* count)
+  ;; Stress copies always use the local PB, independent of saved server mode.
+  (pc-replay-client-command 1 1 "desert-bbush-get-to-19")
+  (set! ghost-render-extras? #t)
+  (replay-ghost-stop!)
+  (process-spawn-function process
+    :name "replay-ghost-stress"
+    :to *pc-pool*
+    :stack-size #x10000
+    (lambda :behavior process ((count int))
+      (stack-size-set! (-> self main-thread) 2048)
+      (format 0 "GHOST-STRESS: BEGIN count=~D category=desert-bbush-get-to-19~%" count)
+      ;; Allow fresh retail boot to reach its scene or target, then use the
+      ;; game's normal scene abort and IL start paths (no OS input injection).
+      (let ((deadline (+ (get-current-time) (seconds 45))))
+        (while (and (not *scene-player*) (not *target*)
+                    (< (get-current-time) deadline))
+          (suspend)))
+      (when *scene-player*
+        (send-event (ppointer->process *scene-player*) 'abort))
+      (dotimes (settle 180) (suspend))
+      (set! *replay-ghost-stress-camera-original* target-cam-pos)
+      (set! target-cam-pos replay-ghost-stress-camera-pos)
+      (let ((failed? #f)
+            (heap-baseline 0))
+        (dotimes (cycle *replay-ghost-stress-cycles*)
+          (when (not failed?)
+            (set-category! *speedrun-info* (speedrun-category desert-bbush-get-to-19))
+            (start-run! *speedrun-info*)
+            (let ((deadline (+ (get-current-time) (seconds 45))))
+              (while (and (< (get-current-time) deadline)
+                          (not (and (-> *speedrun-info* has-started?)
+                                    *target* (-> *target* control)
+                                    (= *master-mode* 'game)
+                                    (process-by-name "wascity-bbush-get-to-19-resolution" *active-pool*))))
+                (suspend)))
+            (let ((manager (the-as task-manager
+                             (process-by-name "wascity-bbush-get-to-19-resolution" *active-pool*))))
+              (cond
+                ((not (and manager *target* (-> *speedrun-info* has-started?)))
+                 (format 0 "GHOST-STRESS: ERROR mission readiness~%")
+                 (set! failed? #t))
+                (else
+                  ;; Prevent ordinary timeout from retiring art mid-test.
+                  (set! (-> manager time-limit) (seconds 600))
+                  (let ((deadline (+ (get-current-time) (seconds 10))))
+                    (while (and (= (pc-replay-playback-start "desert-bbush-get-to-19") 0)
+                                (< (get-current-time) deadline))
+                      (suspend)))
+                  (replay-ghost-spawn-now! (speedrun-category desert-bbush-get-to-19) 0)
+                  (let ((frames 0) (max-boards 0) (max-onscreen 0)
+                        (global-used (&- (-> global current) (the-as uint (-> global base)))))
+                    ;; The first complete playback can lazily intern art names.
+                    ;; Compare subsequent resets after that warm-up has settled.
+                    (when (<= cycle 1) (set! heap-baseline global-used))
+                    (when (or (!= *replay-ghost-spawned-count* count)
+                              *replay-ghost-failure?*
+                              (!= global-used heap-baseline))
+                      (set! failed? #t))
+                    (let ((first (the-as replay-ghost-player
+                                   (replay-ghost-resolve (-> *replay-ghost-slots* players 0)))))
+                      (when first (set! frames (-> first frames))))
+                    (format 0 "GHOST-STRESS: SPAWN cycle=~D count=~D frames=~D global=~D~%"
+                            cycle *replay-ghost-spawned-count* frames global-used)
+                    (dotimes (frame (+ frames 3))
+                      (when (not failed?)
+                        (suspend)
+                        (let ((boards 0) (onscreen 0))
+                          (dotimes (i count)
+                            (let ((ghost (the-as replay-ghost-player
+                                           (replay-ghost-resolve (-> *replay-ghost-slots* players i)))))
+                              (cond
+                                ((not (and ghost (-> ghost sample-valid?)
+                                           (-> ghost next-state) (= (-> ghost next-state name) 'idle)))
+                                 (set! failed? #t))
+                                (else
+                                  (when (-> ghost runner-on-screen?) (+! onscreen 1))
+                                  (when (-> ghost extra-valid?)
+                                    (let ((extra (replay-ghost-resolve (-> ghost extra-handle))))
+                                      (if (and extra (-> extra next-state)
+                                               (= (-> extra next-state name) 'idle))
+                                          (+! boards 1)
+                                          (begin
+                                            (format 0 "GHOST-STRESS: EXTRA-FAIL slot=~D idx=~D state=~S~%"
+                                                    i (-> ghost idx)
+                                                    (if (and extra (-> extra next-state))
+                                                        (-> extra next-state name) 'missing))
+                                            (when extra
+                                              (format 0 "GHOST-STRESS: extra draw=~A skel=~A~%"
+                                                      (-> (the-as process-drawable extra) draw)
+                                                      (-> (the-as process-drawable extra) skel)))
+                                            (set! failed? #t)))))))))
+                          (set! max-boards (max max-boards boards))
+                          (set! max-onscreen (max max-onscreen onscreen))
+                          (when (= (mod frame 300) 0)
+                            (format 0 "GHOST-STRESS: FRAME cycle=~D frame=~D boards=~D onscreen=~D~%"
+                                    cycle frame boards onscreen)))
+                        (when (or *replay-ghost-failure?* (!= *master-mode* 'game))
+                          (set! failed? #t))))
+                    (when (or (!= max-boards count) (!= max-onscreen count))
+                      (set! failed? #t))
+                    (dotimes (i count)
+                      (let ((ghost (the-as replay-ghost-player
+                                     (replay-ghost-resolve (-> *replay-ghost-slots* players i)))))
+                        (when (or (not ghost) (!= (-> ghost idx) (- frames 1)))
+                          (set! failed? #t))))
+                    (format 0 "GHOST-STRESS: CYCLE ~D failed=~S boards=~D onscreen=~D~%"
+                            cycle failed? max-boards max-onscreen)))))
+            (replay-ghost-stop!)
+            (dotimes (settle 3) (suspend))
+            (when (or (process-by-name "replay-ghost-player" *pc-pool*)
+                      (process-by-name "replay-ghost-extra" *pc-pool*))
+              (set! failed? #t))
+            (format 0 "GHOST-STRESS: CLEANUP cycle=~D pc=~D~%" cycle (process-count *pc-pool*))))
+        (replay-ghost-stop!)
+        (set! target-cam-pos *replay-ghost-stress-camera-original*)
+        (set! *replay-ghost-count* 1)
+        ;; Leave recording disabled until this dedicated test runtime exits.
+        (format 0 "GHOST-STRESS: RESULT ~S count=~D~%" (if failed? "FAIL" "PASS") count)))
+    count)
+  (none))
+
+;; Dedicated test-runtime entry point (never executed automatically):
+;; (set! *replay-ghost-stress-cycles* 3)
+;; (replay-ghost-stress-run! 51)

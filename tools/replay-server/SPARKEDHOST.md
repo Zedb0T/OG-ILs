@@ -65,5 +65,14 @@ resource within existing parent capacity; ask before any paid plan change or tak
 resources from another service. Other new services start at 10% CPU / 300 MiB /
 1000 MiB; Communicator's requested baseline is 100% / 1.5 GB / about 5 GB.
 
-This document describes the setup, not proof that HTTPS/DNS or deployment has
-completed. Record the verified public URL and restart result after provisioning.
+## Deployment status
+
+Public HTTPS URL: https://opengoal-ghosts.sparked.network/admin.
+The first full clone and all 20 startup tests passed on SparkedHost at commit
+`2092ca39d`. Initial total disk usage was 597.57 MiB; post-clone memory 179.34 MiB.
+Health, correct/incorrect admin authentication and the real 1607-sample PB's
+upload/download round trip passed. The local PB's SHA-256 remained unchanged.
+The 30-minute `monitor-ghost-rebuild-server` heartbeat monitors this service only.
+The game client now supports verified HTTPS and the new profile default is this
+host; the user's existing test profile was updated without changing identity.
+Restart-to-new-commit persistence verification is the final deployment check.

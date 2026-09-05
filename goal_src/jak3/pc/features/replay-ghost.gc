@@ -1,8 +1,8 @@
 ;;-*-Lisp-*-
 (in-package goal)
 
-;; Phase 2 visual slice: render one native-owned local PB without exposing its
-;; immutable sample storage to GOAL. Recording and playback never alias.
+;; Independent drawable instances share an immutable native PB snapshot.
+;; Sample cursors, offsets, animation state and companion ownership are per ghost.
 
 (define-extern pc-replay-playback-start (function string int))
 (define-extern pc-replay-playback-sample-transform
@@ -16,9 +16,14 @@
 (define-extern pc-replay-playback-stop (function symbol))
 (define-extern pc-replay-recording-active? (function symbol))
 (define-extern pc-replay-recording-count (function int))
+(define-extern pc-replay-client-command (function int int string int))
+(define-extern pc-replay-client-text (function int int string symbol))
 
 (deftype replay-ghost-player (process-drawable)
   ((idx              int32)
+   (slot             int32)
+   (extra-handle     handle)
+   (offset           vector :inline)
    (frames           int32)
    (sample-state     string)
    (sample-animation string)
@@ -49,13 +54,43 @@
 (define *replay-ghost-enabled?* #t)
 (define ghost-render-extras? #t)
 (define *replay-ghost-animation-diagnostics-left* 0)
+(define *replay-ghost-count* 1)
+(define *replay-ghost-stress-active?* #f)
+(define *replay-ghost-spawned-count* 0)
+(define *replay-ghost-failure?* #f)
+
+(defun replay-ghost-resolve ((ghost-handle handle))
+  ;; Zero is our empty-slot sentinel, but GOAL pointer truthiness only tests
+  ;; #f. The engine handle->process macro must not be called with raw zero.
+  (if (nonzero? ghost-handle)
+      (handle->process ghost-handle)
+      (the-as process #f)))
+
+;; Pools are allocated lazily and reused, not recreated on each reset. Keep
+;; handles (not raw process pointers) so recycled companions cannot alias.
+(deftype replay-ghost-registry (structure)
+  ((players handle 150)
+   (player-pools dead-pool 150)
+   (extra-pools dead-pool 150)))
+(define *replay-ghost-slots* (new 'global 'replay-ghost-registry))
+(dotimes (i 150)
+  (set! (-> *replay-ghost-slots* players i) (the-as handle 0))
+  (set! (-> *replay-ghost-slots* player-pools i) #f)
+  (set! (-> *replay-ghost-slots* extra-pools i) #f))
 
 ;; Reuse one fixed-size process allocation on every attempt. This keeps the
 ;; shared variable-sized process heap out of the retry lifecycle.
-(define *replay-ghost-dead-pool*
-  (new 'global 'dead-pool 1 #x20000 "*replay-ghost-dead-pool*"))
-(define *replay-ghost-extra-dead-pool*
-  (new 'global 'dead-pool 1 #x20000 "*replay-ghost-extra-dead-pool*"))
+(defun replay-ghost-ensure-slot! ((slot int))
+  (when (not (-> *replay-ghost-slots* player-pools slot))
+    ;; Leave space for streamed game allocations; exhaustion is a failed spawn,
+    ;; not permission to corrupt the global heap during a stress test.
+    (when (< (&- (-> global top) (the-as uint (-> global current))) #x60000)
+      (return #f))
+    (set! (-> *replay-ghost-slots* player-pools slot)
+          (new 'global 'dead-pool 1 #x20000 "replay-player-slot"))
+    (set! (-> *replay-ghost-slots* extra-pools slot)
+          (new 'global 'dead-pool 1 #x20000 "replay-extra-slot")))
+  #t)
 
 (defstate idle (replay-ghost-extra)
   :virtual #t
@@ -161,7 +196,10 @@
   (set! (-> self root) (new 'process 'trsqv))
   (set-vector! (-> self root scale) 1.0 1.0 1.0 1.0)
   (quaternion-identity! (-> self root quat))
-  (set! (-> self level) (level-get-target-inside *level*))
+  ;; Resolve the level that actually owns the companion art. In a cold retail
+  ;; boot board lives in GAME, not the physical level containing the player.
+  (when (not (art-group-get-by-name *level* (-> group art-group-name) (&-> self level)))
+    (go process-drawable-art-error "replay companion art unavailable"))
   (initialize-skeleton self group (the-as pair 0))
   (set! (-> self draw cloth-instances) (the-as (array cloth-system) #f))
   (set! (-> self draw shadow-ctrl) #f)
@@ -197,11 +235,11 @@
             (and (= *master-mode* 'game)
                  (> (-> self frames) 0)
                  (pc-replay-playback-sample-transform
-                   (-> self idx)
+                   (logior (shl (the int (-> self slot)) 32) (-> self idx))
                    (-> self root trans)
                    (the-as vector (-> self root quat)))
                  (pc-replay-playback-sample-metadata
-                   (-> self idx)
+                   (logior (shl (the int (-> self slot)) 32) (-> self idx))
                    (-> self sample-state)
                    (-> self sample-animation)
                    (-> self animation-info))))
@@ -209,19 +247,23 @@
             (and (-> self sample-valid?)
                  ghost-render-extras?
                  (pc-replay-playback-sample-extra-transform
-                   (-> self idx)
+                   (logior (shl (the int (-> self slot)) 32) (-> self idx))
                    (-> self extra-art)
                    (-> self extra-trans)
                    (-> self extra-quat))
                  (pc-replay-playback-sample-extra-metadata
-                   (-> self idx)
+                   (logior (shl (the int (-> self slot)) 32) (-> self idx))
                    (-> self extra-animation)
                    (-> self extra-info)
                    (-> self extra-scale))))
+      (when (-> self sample-valid?)
+        (vector+! (-> self root trans) (-> self root trans) (-> self offset)))
+      (when (-> self extra-valid?)
+        (vector+! (-> self extra-trans) (-> self extra-trans) (-> self offset)))
       ;; The companion owns only rendering state. Replace it when the recorded
       ;; mount art changes (for example board -> vehicle) and remove it as soon
       ;; as the sample returns to on-foot play or the feature bool is disabled.
-      (let ((extra (process-by-name "replay-ghost-extra" *pc-pool*)))
+      (let ((extra (replay-ghost-resolve (-> self extra-handle))))
         (when (and extra
                    (or (not (-> self extra-valid?))
                        (not (string=
@@ -229,6 +271,7 @@
                                   draw art-group name)
                               (-> self extra-art)))))
           (deactivate extra)
+          (set! (-> self extra-handle) (the-as handle 0))
           (set! extra #f))
         (when (and (-> self extra-valid?)
                    (not extra))
@@ -245,12 +288,15 @@
                       *temp-string*
                       (the-as (pointer level) #f)))))
             (when (and group (nonzero? group) (= (-> group type) skeleton-group))
-              (process-spawn
+              (let ((spawned (process-spawn
                 replay-ghost-extra
                 group
                 :name "replay-ghost-extra"
-                :from *replay-ghost-extra-dead-pool*
-                :to self)))))
+                :from (-> *replay-ghost-slots* extra-pools (-> self slot))
+                :to self)))
+                (if spawned
+                    (set! (-> self extra-handle) (ppointer->handle spawned))
+                    (set! *replay-ghost-failure?* #t)))))))
       (when (-> self sample-valid?)
         ;; Cache only the art-group index and copied name, never an animation
         ;; pointer. The candidate is reacquired and validated from the ghost's
@@ -332,20 +378,6 @@
         ;; Hold at the finish instead of visibly looping back to the start.
         (when (< (+ (-> self idx) 1) (-> self frames))
           (+! (-> self idx) 1)))
-      ;; Temporary manual-test overlay. Besides identifying the PB, this makes
-      ;; the native sample, name lookup, and recorded pose visible in-game.
-      (format (clear (-> self runner-name))
-              "Personal Best~%ok=~S i=~D~%a=~S~%s=~S idx=~D f=~f"
-              (-> self sample-valid?)
-              (-> self idx)
-              (-> self sample-animation)
-              (-> self sample-state)
-              (-> self animation-index)
-              (-> self animation-info x))
-      (format (-> self runner-name)
-              "~%x=~S xa=~S"
-              (-> self extra-art)
-              (-> self extra-animation))
       (suspend)))
   :post
   (behavior ()
@@ -356,7 +388,7 @@
     ;; change streamed art. replay-ghost-update! retires us in those modes.
     (when (= *master-mode* 'game)
       (ja-post)
-      (when (and (-> self runner-on-screen?)
+      (when (and (or (= *replay-ghost-count* 1) (= (-> self slot) 0)) (-> self runner-on-screen?)
                  (nonzero? (-> self runner-name)))
         (print-game-text
           (-> self runner-name)
@@ -382,10 +414,17 @@
     (&+! (-> this runner-font) diff))
   (call-parent-method this diff))
 
-(defbehavior replay-ghost-player-init-by-other replay-ghost-player ((frames int) (start-idx int))
+(defbehavior replay-ghost-player-init-by-other replay-ghost-player ((frames int) (start-idx int) (slot int))
   (stack-size-set! (-> self main-thread) 1024)
   (set! (-> self idx) (min start-idx (- frames 1)))
   (set! (-> self frames) frames)
+  (set! (-> self slot) slot)
+  (set! (-> self extra-handle) (the-as handle 0))
+  (set! (-> *replay-ghost-slots* players slot) (process->handle self))
+  (set-vector! (-> self offset) 0.0 0.0 0.0 0.0)
+  (when (> *replay-ghost-count* 1)
+    (set! (-> self offset x) (* (the float (- (mod slot 15) 7)) (meters 0.35)))
+    (set! (-> self offset z) (* (the float (/ slot 15)) (meters 0.35))))
   (set! (-> self sample-state)
         (new 'process 'string 48 (the-as string #f)))
   (set! (-> self sample-animation)
@@ -405,9 +444,8 @@
   (set! (-> self animation-index) -1)
   (set! (-> self sample-valid?) #f)
   (set! (-> self extra-valid?) #f)
-  (set! *replay-ghost-animation-diagnostics-left* 8)
   (set! (-> self runner-name) (new 'process 'string 256 (the-as string #f)))
-  (format (-> self runner-name) "Personal Best")
+  (pc-replay-client-text 2 slot (-> self runner-name))
   (pc-encode-utf8-string (-> self runner-name) (-> self runner-name))
   (set! (-> self runner-font)
         (new 'process 'font-context *font-default-matrix* 0 0 0.0
@@ -466,7 +504,6 @@
   ;; test while avoiding force-fade's renderer-specific visibility edge cases.
   (set-vector! (the-as vector (-> self draw color-mult)) 0.3 0.7 1.35 1.0)
   (set-vector! (the-as vector (-> self draw color-emissive)) 0.05 0.2 0.45 0.0)
-  (format 0 "replay: spawned local PB ghost with ~D samples~%" frames)
   (go-virtual idle))
 
 (defun replay-ghost-stop! ()
@@ -474,6 +511,9 @@
   (kill-by-name "replay-ghost-safe-spawn" *pc-pool*)
   (kill-by-type replay-ghost-extra *pc-pool*)
   (kill-by-type replay-ghost-player *pc-pool*)
+  (dotimes (i 150)
+    (set! (-> *replay-ghost-slots* players i) (the-as handle 0)))
+  (set! *replay-ghost-spawned-count* 0)
   (pc-replay-playback-stop)
   (none))
 
@@ -490,19 +530,32 @@
             (pc-replay-playback-start
               (enum->string speedrun-category category))))
       (when (> frames 0)
-        (when (not (process-spawn
-                     replay-ghost-player
-                     frames
-                     start-idx
-                     :from *replay-ghost-dead-pool*
+        (set! *replay-ghost-failure?* #f)
+        (set! *replay-ghost-animation-diagnostics-left* 8)
+        (dotimes (slot (min 150 (max *replay-ghost-count* (pc-replay-client-command 12 0 ""))))
+          (if (and (replay-ghost-ensure-slot! slot)
+                   (process-spawn replay-ghost-player (pc-replay-client-command 13 slot "") start-idx slot
+                     :from (-> *replay-ghost-slots* player-pools slot)
                      :to *pc-pool*))
-          (format 0 "replay: could not allocate local PB ghost process~%")
-          (pc-replay-playback-stop)))))
+              (+! *replay-ghost-spawned-count* 1)
+              (set! *replay-ghost-failure?* #t)))
+        (format 0 "replay: spawned ~D/~D ghosts, samples=~D~%"
+                *replay-ghost-spawned-count*
+                (min 150 (max *replay-ghost-count* (pc-replay-client-command 12 0 ""))) frames)
+        (when *replay-ghost-stress-active?*
+          (let ((first (replay-ghost-resolve (-> *replay-ghost-slots* players 0))))
+            (when first
+              (format 0 "GHOST-STRESS: MEMORY player-used=~D global-free=~D~%"
+                      (process-heap-used first)
+                      (&- (-> global top) (the-as uint (-> global current)))))))
+        (when *replay-ghost-failure?*
+          (replay-ghost-stop!)))))
   (none))
 
 (defun replay-ghost-start! ()
   "Schedule PB playback once mission-start target art is genuinely ready."
   (replay-ghost-stop!)
+  (set! *replay-ghost-failure?* #f)
   (when (and *replay-ghost-enabled?*
              (pc-replay-recording-active?)
              (= *master-mode* 'game))
@@ -536,6 +589,24 @@
 
 (defun replay-ghost-update! ()
   "Keep the PB drawable within safe gameplay/art lifetime boundaries."
+  (when *replay-ghost-stress-active?*
+    (return #f))
+  ;; Inspect every instance; a global name lookup only sees the first ghost.
+  (dotimes (i *replay-ghost-spawned-count*)
+    (let* ((ghost (the-as replay-ghost-player
+                    (replay-ghost-resolve (-> *replay-ghost-slots* players i))))
+           (extra (if ghost (replay-ghost-resolve (-> ghost extra-handle)) (the-as process #f))))
+      (when (or (not ghost)
+                (and (-> ghost next-state)
+                     (= (-> ghost next-state name) 'process-drawable-art-error))
+                (and extra (-> extra next-state)
+                     (= (-> extra next-state name) 'process-drawable-art-error)))
+        (set! *replay-ghost-failure?* #t))))
+  (when *replay-ghost-failure?*
+    (replay-ghost-stop!)
+    ;; A failed batch stays stopped until an explicit start/retry. Otherwise
+    ;; the missing-ghost recovery below would retry exhaustion every frame.
+    (return #f))
   (let ((ghost (process-by-name "replay-ghost-player" *pc-pool*))
         (pending (process-by-name "replay-ghost-safe-spawn" *pc-pool*))
         (extra (process-by-name "replay-ghost-extra" *pc-pool*)))

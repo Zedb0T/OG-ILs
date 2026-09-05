@@ -534,6 +534,10 @@ void InitMachine_PCPort() {
                               (void*)kmachine_extras::pc_replay_playback_sample_extra_metadata);
   make_function_symbol_from_c("pc-replay-playback-stop",
                               (void*)kmachine_extras::pc_replay_playback_stop);
+  make_function_symbol_from_c("pc-replay-client-command",
+                              (void*)kmachine_extras::pc_replay_client_command);
+  make_function_symbol_from_c("pc-replay-client-text",
+                              (void*)kmachine_extras::pc_replay_client_text);
 
   // setup string constants
   auto user_dir_path = file_util::get_user_config_dir();

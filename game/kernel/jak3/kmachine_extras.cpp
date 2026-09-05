@@ -19,6 +19,7 @@
 #include "game/kernel/common/kscheme.h"
 #include "game/overlord/jak3/iso_cd.h"
 #include "game/runtime.h"
+#include "game/system/replay_client.h"
 
 namespace jak3 {
 namespace kmachine_extras {
@@ -27,8 +28,16 @@ AutoSplitterBlock g_auto_splitter_block_jak3;
 namespace {
 constexpr float kReplayGameUnitsPerMeter = 4096.f;
 replay::Recorder g_replay_recorder;
-std::optional<replay::File> g_replay_playback;
+std::shared_ptr<const replay::File> g_replay_playback;
+std::vector<replay_client::Ghost> g_replay_ghosts;
 bool g_replay_logged_extra = false;
+
+void select_replay_sample(s64& index) {
+  const auto slot = static_cast<u64>(index) >> 32;
+  index = static_cast<s64>(static_cast<u64>(index) & 0xffffffff);
+  g_replay_playback = g_replay_ghosts.empty() ? nullptr :
+      g_replay_ghosts.at(slot % g_replay_ghosts.size()).file;
+}
 
 fs::path replay_directory_for(std::string_view category) {
   return file_util::get_user_features_dir(g_game_version) / "replays" / std::string(category);
@@ -157,6 +166,7 @@ u64 pc_replay_recording_finish(u32 completed_symbol) {
   try {
     const auto recording = g_replay_recorder.finish(completed_symbol != s7.offset);
     const auto new_best = save_recording(recording);
+    replay_client::completed(recording);
     lg::info("replay: saved {} {} attempt with {} samples{}", recording.category,
              recording.completed ? "completed" : "unfinished", recording.samples.size(),
              recording.truncated ? " (duration limit reached)" : "");
@@ -226,40 +236,19 @@ u64 pc_replay_recording_sample_extra_animation(u32 animation_ptr, u32 animation_
 
 s64 pc_replay_playback_start(u32 category_ptr) {
   g_replay_playback.reset();
+  g_replay_ghosts.clear();
   if (!category_ptr) {
     return 0;
   }
 
   try {
     auto* category_string = Ptr<String>(category_ptr).c();
-    const auto category = std::string_view(category_string->data(), category_string->len);
-    const auto directory = replay_directory_for(category);
-    const auto best_path = directory / "best-completed.ogr.json";
-    auto load_path = best_path;
-    if (!fs::exists(load_path)) {
-      // Phase 1 retained only the most recent completion. Promote it as the
-      // initial PB so existing recordings can be tested immediately; all
-      // subsequent completed runs use the normal fastest-time comparison.
-      load_path = directory / "last-completed.ogr.json";
-    }
-    if (!fs::exists(load_path)) {
-      lg::info("replay: no local best available for {}", category);
-      return 0;
-    }
-
-    auto playback = replay::load(load_path);
-    if (!playback.completed || playback.category != category) {
-      throw replay::FormatError("local best does not match the selected category");
-    }
-    if (load_path != best_path) {
-      replay::atomic_save(best_path, playback);
-      lg::info("replay: promoted the Phase 1 completion to the initial local best for {}",
-               category);
-    }
-    const auto sample_count = static_cast<s64>(playback.samples.size());
-    g_replay_playback.emplace(std::move(playback));
-    lg::info("replay: loaded local best for {} ({} samples)", category, sample_count);
-    return sample_count;
+    const std::string category(category_string->data());
+    replay_client::prepare(category);
+    g_replay_ghosts = replay_client::snapshot(category);
+    if (g_replay_ghosts.empty()) return 0;
+    g_replay_playback = g_replay_ghosts.front().file;
+    return static_cast<s64>(g_replay_playback->samples.size());
   } catch (const std::exception& error) {
     g_replay_playback.reset();
     lg::warn("replay: could not load local best for playback: {}", error.what());
@@ -268,6 +257,7 @@ s64 pc_replay_playback_start(u32 category_ptr) {
 }
 
 u64 pc_replay_playback_sample_transform(s64 sample_index, u32 position_ptr, u32 rotation_ptr) {
+  select_replay_sample(sample_index);
   if (!g_replay_playback || !position_ptr || !rotation_ptr || sample_index < 0 ||
       sample_index >= static_cast<s64>(g_replay_playback->samples.size())) {
     return bool_to_symbol(false);
@@ -290,6 +280,7 @@ u64 pc_replay_playback_sample_metadata(s64 sample_index,
                                        u32 state_ptr,
                                        u32 animation_ptr,
                                        u32 animation_info_ptr) {
+  select_replay_sample(sample_index);
   if (!g_replay_playback || !state_ptr || !animation_ptr || !animation_info_ptr ||
       sample_index < 0 || sample_index >= static_cast<s64>(g_replay_playback->samples.size())) {
     return bool_to_symbol(false);
@@ -312,6 +303,7 @@ u64 pc_replay_playback_sample_extra_transform(s64 sample_index,
                                               u32 art_group_ptr,
                                               u32 position_ptr,
                                               u32 rotation_ptr) {
+  select_replay_sample(sample_index);
   if (!g_replay_playback || !art_group_ptr || !position_ptr || !rotation_ptr ||
       sample_index < 0 ||
       sample_index >= static_cast<s64>(g_replay_playback->samples.size())) {
@@ -339,6 +331,7 @@ u64 pc_replay_playback_sample_extra_metadata(s64 sample_index,
                                              u32 animation_ptr,
                                              u32 animation_info_ptr,
                                              u32 scale_ptr) {
+  select_replay_sample(sample_index);
   if (!g_replay_playback || !animation_ptr || !animation_info_ptr || !scale_ptr || sample_index < 0 ||
       sample_index >= static_cast<s64>(g_replay_playback->samples.size())) {
     return bool_to_symbol(false);
@@ -359,9 +352,28 @@ u64 pc_replay_playback_sample_extra_metadata(s64 sample_index,
 }
 
 u64 pc_replay_playback_stop() {
-  const auto was_active = g_replay_playback.has_value();
+  const auto was_active = !g_replay_ghosts.empty();
   g_replay_playback.reset();
+  g_replay_ghosts.clear();
   return bool_to_symbol(was_active);
+}
+
+s64 pc_replay_client_command(s64 operation, s64 value, u32 category_ptr) {
+  if (operation == 12) return static_cast<s64>(g_replay_ghosts.size());
+  if (operation == 13) return g_replay_ghosts.empty() || value < 0 ? 0 :
+      static_cast<s64>(g_replay_ghosts.at(value % g_replay_ghosts.size()).file->samples.size());
+  return replay_client::command(static_cast<int>(operation), static_cast<int>(value),
+      category_ptr ? std::string(Ptr<String>(category_ptr)->data()) : "");
+}
+
+u64 pc_replay_client_text(s64 operation, s64 index, u32 destination_ptr) {
+  std::string value;
+  if (operation == 2) {
+    if (!g_replay_ghosts.empty() && index >= 0) value = g_replay_ghosts.at(index % g_replay_ghosts.size()).label;
+  } else value = replay_client::text(static_cast<int>(operation), static_cast<int>(index));
+  std::array<char, 256> bytes = {};
+  std::memcpy(bytes.data(), value.data(), std::min(value.size(), bytes.size() - 1));
+  return bool_to_symbol(copy_replay_string(destination_ptr, bytes));
 }
 
 void update_discord_rpc(u32 discord_info) {

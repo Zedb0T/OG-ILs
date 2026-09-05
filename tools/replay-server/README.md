@@ -2,7 +2,9 @@
 
 A Python-standard-library service for Jak 3 replay uploads, mission catalogs,
 downloads, and player display-name administration. Python 3.11+; no pip packages.
-This first version is deliberately **local-only**, not an internet leaderboard.
+`server.py` is the loopback-only development entry point. SparkedHost uses the
+bounded Waitress entry point described in [SPARKEDHOST.md](SPARKEDHOST.md).
+Test admin: https://opengoal-ghosts.sparked.network/admin (`user` / `pass`).
 
 ## Start
 
@@ -66,6 +68,9 @@ credential on first client use, and atomically saves them in:
 %APPDATA%/OpenGOAL/jak3/features/ghost-client.json
 ```
 
+New profiles default to `https://opengoal-ghosts.sparked.network`; existing
+profiles keep their saved URL. Remote URLs must use HTTPS (certificate checks
+stay enabled), while local testing can still use `http://127.0.0.1:8765`.
 The same file stores server URL, mode, auto-submit choice, and per-mission Custom
 IDs. Keep it to preserve identity; don't share the upload credential. A corrupt
 identity file reports an error rather than silently creating another player.

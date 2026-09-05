@@ -1644,6 +1644,17 @@
   (progress-timer-bottom-left #x152d)
   (progress-timer-pb-options #x152e)
   (progress-timer-wr-options #x152f)
+  (progress-ghost-replays #x1530)
+  (progress-ghost-mode #x1531)
+  (progress-ghost-status #x1532)
+  (progress-ghost-refresh #x1533)
+  (progress-ghost-browser #x1534)
+  (progress-ghost-toggle #x1535)
+  (progress-ghost-next #x1536)
+  (progress-ghost-prev #x1537)
+  (progress-ghost-submit-pb #x1538)
+  (progress-ghost-submit-last #x1539)
+  (progress-ghost-auto-submit #x153a)
   )
 ;; ---text-id
 
