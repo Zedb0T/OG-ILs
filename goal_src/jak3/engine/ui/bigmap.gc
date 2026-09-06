@@ -7,6 +7,16 @@
 
 ;; DECOMP BEGINS
 
+;; The PS2 pause menu borrows the tail of the frame DMA buffers for these
+;; streams. PC menus (especially the mission leaderboard) can draw into that
+;; space and overwrite a still-loaded progress-minimap texture page. Give the
+;; streams their own persistent, 64-byte-aligned storage instead. Their heaps
+;; are reset on each load, but the backing allocation is made only once.
+(#when PC_PORT
+  (define *bigmap-pc-stream-storage* (new 'global 'array 'uint8 #x138840))
+  (define *bigmap-pc-stream-base*
+    (the-as pointer (logand -64 (+ (the-as int *bigmap-pc-stream-storage*) 63)))))
+
 (defmethod new bigmap ((allocation symbol) (type-to-make type))
   (let ((gp-0 (object-new allocation type-to-make (the-as int (-> type-to-make size)))))
     (set! (-> gp-0 bigmap-image)
@@ -19,6 +29,8 @@
                    (v1-1 (-> arg0 heap))
                    )
                (set! (-> v1-1 base) (the-as pointer a1-3))
+               (#when PC_PORT
+                 (set! (-> v1-1 base) *bigmap-pc-stream-base*))
                (set! (-> v1-1 current) (-> v1-1 base))
                (set! (-> v1-1 top-base) (&+ (-> v1-1 base) #x90800))
                (set! (-> v1-1 top) (-> v1-1 top-base))
@@ -38,6 +50,8 @@
                    (v1-1 (-> arg0 heap))
                    )
                (set! (-> v1-1 base) (the-as pointer a1-3))
+               (#when PC_PORT
+                 (set! (-> v1-1 base) (&+ *bigmap-pc-stream-base* #x90800)))
                (set! (-> v1-1 current) (-> v1-1 base))
                (set! (-> v1-1 top-base) (&+ (-> v1-1 base) #x54000))
                (set! (-> v1-1 top) (-> v1-1 top-base))
@@ -57,6 +71,8 @@
                    (v1-1 (-> arg0 heap))
                    )
                (set! (-> v1-1 base) (the-as pointer a1-3))
+               (#when PC_PORT
+                 (set! (-> v1-1 base) (&+ *bigmap-pc-stream-base* #xe4800)))
                (set! (-> v1-1 current) (-> v1-1 base))
                (set! (-> v1-1 top-base) (&+ (-> v1-1 base) #x54000))
                (set! (-> v1-1 top) (-> v1-1 top-base))
