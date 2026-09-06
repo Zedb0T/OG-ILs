@@ -870,14 +870,15 @@ This gives us more freedom to write code how we want.
   `(progress-new-generic-scrolling-page (text-id progress-ghost-replays)
     (new 'static 'menu-generic-carousel-option
       :name (text-id progress-ghost-mode)
-      :get-max-size-fn (lambda () 5)
+      :get-max-size-fn (lambda () 6)
       :get-item-index-fn (lambda () (ghost-menu-command 0 0))
       :get-item-label-fn (lambda ((index int))
         (case index
-          ((0) "Default - Next Faster Ghost")
+          ((0) "Default - Two Faster Ghosts")
           ((1) "Race vs Your Best Time")
           ((2) "Race vs WR")
           ((3) "Race vs Your Last Attempt")
+          ((5) "Race vs Next Faster")
           (else "Custom - Selected Replays")))
       :on-confirm (lambda ((index int) (the-progress progress))
         (set! *ghost-browser-index* 0)

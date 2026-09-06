@@ -60,7 +60,26 @@ Read-only JSON endpoints, suitable for a future in-game browser:
 Use `source=speedrun|ghosts`, `game=jak3`, `group=all|main|orb|side`,
 `offset=0`, and `limit=50` (maximum 100). Responses include a snapshot revision,
 UTC update time, and pagination. See `/api` for schemas and examples.
-This adds the API, not the future in-game leaderboard UI.
+The native pause-menu experiment below also uses this public API.
+
+### Native pause-menu experiment
+
+On PC, **Pause → Leaderboards** replaces the Inventory page (inventory/save
+data is unchanged). This first in-game browser is fixed to **Orb Search 18
+(Spargus E)** and the **uploaded ghosts** source. It uses the selected Ghost
+Server endpoint, not a separate hardcoded host. Eight racers per page show
+rank, best time, gap to WR and points; your saved player ID highlights your row.
+Left/right or L1/R1 page, Square refreshes, and Triangle returns normally.
+
+The client fetches public metadata only, off the game thread: no registration,
+ping, upload or replay download is needed to open the page. Its cache holds at
+most eight pages for the current server, with a 60-second TTL, a five-second
+manual-refresh cooldown, and a 15-second retry backoff. Failed or malformed
+responses preserve last-good rows with an offline banner. Switching servers
+clears those pages and rejects old in-flight responses. Responses are capped
+at 256 KiB and ten seconds; names are sanitized before native font rendering.
+`test_client_leaderboard.py` runs the paging/cache/failure integration checks
+against a temporary local fixture and profile.
 
 Speedrun.com refreshes hourly in one background worker, paced at 48 requests
 per minute. Page views never trigger upstream crawls. A complete last-good

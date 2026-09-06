@@ -2,11 +2,13 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <deque>
 #include <fstream>
 #include <functional>
 #include <iomanip>
+#include <map>
 #include <mutex>
 #include <random>
 #include <regex>
@@ -26,7 +28,25 @@ namespace replay_client {
 namespace {
 using json = nlohmann::json;
 constexpr int kCustomLimit = 8;
+// Keep saved IDs 0-4 stable: Default gains two opponents; the old single
+// next-faster behavior remains explicitly selectable as mode 5.
+constexpr int kLastRaceMode = 5;
 constexpr size_t kSnapshotBudget = 64 * 1024 * 1024;
+constexpr int kLeaderboardPageSize = 8;
+constexpr const char* kLeaderboardMission = "wascity-bbush-get-to-18";
+
+struct LeaderboardRow {
+  int place = 0, points = 0;
+  bool own = false;
+  std::string name, time, gap;
+};
+struct LeaderboardPage {
+  std::vector<LeaderboardRow> rows;
+  std::string wr = "--", status;
+  int total = 0;
+  bool valid = false;
+  std::chrono::steady_clock::time_point retry_after{};
+};
 
 bool category_ok(const std::string& value) {
   return std::regex_match(value, std::regex("[A-Za-z0-9_-]{1,96}"));
@@ -89,11 +109,16 @@ void save_json(const fs::path& path, const json& data) {
 #endif
 }
 
+struct ResponseBuffer {
+  std::string contents;
+  size_t limit;
+};
 size_t receive(char* bytes, size_t size, size_t count, void* user) {
-  auto& output = *static_cast<std::string*>(user);
-  if (size && count > replay::kMaxFileBytes / size) return 0;
+  auto& buffer = *static_cast<ResponseBuffer*>(user);
+  auto& output = buffer.contents;
+  if (size && count > buffer.limit / size) return 0;
   const auto length = size * count;
-  if (length > replay::kMaxFileBytes - output.size()) return 0;
+  if (length > buffer.limit - output.size()) return 0;
   output.append(bytes, length);
   return length;
 }
@@ -105,7 +130,7 @@ std::string request(const std::string& base, const std::string& path,
                     const std::string& token = "") {
   auto* curl = curl_easy_init();
   if (!curl) throw std::runtime_error("HTTP initialization failed");
-  std::string response;
+  ResponseBuffer response{{}, path.rfind("/api/v1/", 0) == 0 ? 256 * 1024 : replay::kMaxFileBytes};
   curl_slist* headers = nullptr;
   headers = curl_slist_append(headers, "Content-Type: application/json");
   if (!player.empty()) headers = curl_slist_append(headers, ("X-Player-ID: " + player).c_str());
@@ -116,7 +141,7 @@ std::string request(const std::string& base, const std::string& path,
   curl_easy_setopt(curl, CURLOPT_PROXY, "");
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 5000L);
-  curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 30000L);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, path.rfind("/api/v1/", 0) == 0 ? 10000L : 30000L);
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
@@ -134,7 +159,7 @@ std::string request(const std::string& base, const std::string& path,
   curl_easy_cleanup(curl);
   if (result != CURLE_OK) throw std::runtime_error("Ghost server unavailable");
   if (status < 200 || status >= 300) throw std::runtime_error("Ghost server rejected request (" + std::to_string(status) + ")");
-  return response;
+  return response.contents;
 }
 
 class Client {
@@ -155,7 +180,7 @@ class Client {
     if (!id_ok(player) || !std::regex_match(token, std::regex("[a-f0-9]{64}")) ||
         !std::regex_match(base, std::regex("(http://127\\.0\\.0\\.1:[0-9]{1,5}|https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?)")))
       throw std::runtime_error("Invalid ghost-client.json identity/server");
-    mode = std::clamp(config.value("mode", 0), 0, 4);
+    mode = std::clamp(config.value("mode", 0), 0, kLastRaceMode);
     // Older menu reads inserted null entries into this map. Repair only the
     // selections; retain player identity, endpoints and all replay files.
     const auto custom = normalize_custom(config.value("custom", json::object()));
@@ -297,7 +322,7 @@ class Client {
       std::string result_status = "Ready";
       bool more = false;
       try {
-        auto best = (selected_mode == 0 || selected_mode == 1) ? load_local(category, false) : nullptr;
+        auto best = (selected_mode == 0 || selected_mode == 1 || selected_mode == 5) ? load_local(category, false) : nullptr;
         if (selected_mode == 1 || selected_mode == 3) {
           auto file = selected_mode == 3 ? load_local(category, true) : best;
           if (file) result.push_back({file, selected_mode == 3 ? "Last Attempt" : "Personal Best"});
@@ -314,11 +339,15 @@ class Client {
               choices.push_back(match != rows.end() ? *match : json::parse(request(server, "/replays/" + id + "/metadata")));
             }
           } else {
-            auto url = "/selection?category=" + category + "&player_id=" + player + "&mode=" + (selected_mode == 2 ? "wr" : "default");
+            const auto policy = selected_mode == 2 ? "wr" : selected_mode == 0 ? "two-faster" : "default";
+            auto url = "/selection?category=" + category + "&player_id=" + player + "&mode=" + policy;
             if (best) url += "&best_seconds=" + std::to_string(best->duration_seconds);
             choices = json::parse(request(server, url)).at("replays");
           }
           size_t memory = 0;
+          const size_t max_choices = selected_mode == 4 ? kCustomLimit : selected_mode == 0 ? 2 : 1;
+          if (!choices.is_array() || choices.size() > max_choices)
+            throw std::runtime_error("Too many ghosts returned for race mode");
           for (const auto& row : choices) {
             const auto id = row.at("id").get<std::string>();
             if (!id_ok(id)) throw std::runtime_error("Invalid replay ID from server");
@@ -342,13 +371,13 @@ class Client {
             label += " " + time_label(file->duration_seconds);
             result.push_back({file, label});
           }
-          if (selected_mode == 0 && result.empty() && best) result.push_back({best, "Personal Best"});
+          if ((selected_mode == 0 || selected_mode == 5) && result.empty() && best) result.push_back({best, "Personal Best"});
         }
         if (result.empty()) result_status = "No replay available for this mode";
       } catch (const std::exception& error) {
         result.clear();
         result_status = error.what();
-        if (selected_mode == 0) {
+        if (selected_mode == 0 || selected_mode == 5) {
           try { auto best = load_local(category, false); if (best) result.push_back({best, "Personal Best (offline)"}); }
           catch (...) {}
         }
@@ -361,6 +390,88 @@ class Client {
       ready = true;
       status = std::move(result_status);
     });
+  }
+
+  // Inventory's read-only leaderboard uses the same bounded worker, never the
+  // GOAL thread. Eight small cached pages, 60s TTL, 15s failure backoff, 5s manual
+  // refresh cooldown. Server switches invalidate both pages and in-flight work.
+  void leaderboard_refresh(bool force = false) { // caller owns mutex
+    const auto now = std::chrono::steady_clock::now();
+    const auto found = leaderboard_pages.find(leaderboard_page);
+    if (leaderboard_pending || jobs.size() >= 8 ||
+        (force ? now < leaderboard_manual_after :
+         found != leaderboard_pages.end() && now < found->second.retry_after)) return;
+    const auto index = leaderboard_page;
+    const auto server = base;
+    const auto generation = server_revision;
+    enqueue([this, index, server, generation] {
+      LeaderboardPage result;
+      try {
+        const auto raw = request(server, std::string("/api/v1/missions/") + kLeaderboardMission +
+            "/leaderboard?source=ghosts&game=jak3&limit=" + std::to_string(kLeaderboardPageSize) +
+            "&offset=" + std::to_string(index * kLeaderboardPageSize));
+        if (raw.size() > 256 * 1024) throw std::runtime_error("Leaderboard response too large");
+        const auto data = json::parse(raw);
+        if (data.at("api_version") != 1 || data.at("source") != "ghosts" ||
+            data.at("game") != "jak3" || data.at("mission").at("mission_id") != kLeaderboardMission ||
+            data.at("offset") != index * kLeaderboardPageSize ||
+            !data.at("items").is_array() || data.at("items").size() > kLeaderboardPageSize)
+          throw std::runtime_error("Unexpected leaderboard response");
+        result.total = data.at("total").get<int>();
+        if (result.total < 0 || result.total > 1000000)
+          throw std::runtime_error("Invalid leaderboard count");
+        const auto& wr_value = data.at("mission").at("wr_seconds");
+        const auto wr = wr_value.is_null() ? 0.0f : wr_value.get<float>();
+        if (!std::isfinite(wr) || wr < 0 || wr > 601)
+          throw std::runtime_error("Invalid leaderboard record");
+        if (!wr_value.is_null()) result.wr = time_label(wr);
+        for (const auto& item : data.at("items")) {
+          LeaderboardRow row;
+          row.place = item.at("place").get<int>();
+          row.points = item.at("points").get<int>();
+          const auto duration = item.at("duration_seconds").get<float>();
+          const auto pid = item.at("player_id").get<std::string>();
+          if (!id_ok(pid) || row.place < 1 || row.place > result.total || row.points < 0 ||
+              row.points > 100 || !std::isfinite(duration) || duration < wr || duration > 601)
+            throw std::runtime_error("Invalid leaderboard row");
+          row.own = pid == player;
+          row.name = item.at("display_name").get<std::string>();
+          for (auto& ch : row.name) if (ch < 32 || ch > 126 || ch == '~') ch = '_';
+          if (row.name.empty()) row.name = "Unknown";
+          if (row.name.size() > 23) row.name = row.name.substr(0, 20) + "...";
+          row.time = time_label(duration);
+          row.gap = duration == wr ? "WR" : "+" + time_label(duration - wr);
+          result.rows.push_back(std::move(row));
+        }
+        result.valid = true;
+        result.status = "LIVE STANDINGS  /  60s cache";
+        result.retry_after = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+      } catch (const std::exception&) {
+        result = LeaderboardPage{}; // never publish a partially validated page
+        result.status = "Offline - press Square to retry";
+        result.retry_after = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+      }
+      std::lock_guard lock(mutex);
+      if (generation != server_revision) return;
+      leaderboard_pending = false;
+      auto previous = leaderboard_pages.find(index);
+      if (!result.valid && previous != leaderboard_pages.end() && previous->second.valid) {
+        previous->second.status = "OFFLINE  /  Showing cached standings";
+        previous->second.retry_after = result.retry_after;
+      } else {
+        if (result.valid) leaderboard_total = result.total;
+        if (leaderboard_pages.size() >= 8 && previous == leaderboard_pages.end())
+          leaderboard_pages.erase(leaderboard_pages.begin());
+        leaderboard_pages[index] = std::move(result);
+      }
+    });
+    leaderboard_pending = true;
+    leaderboard_manual_after = now + std::chrono::seconds(5);
+  }
+
+  const LeaderboardPage* leaderboard_view() const {
+    const auto found = leaderboard_pages.find(leaderboard_page);
+    return found == leaderboard_pages.end() ? nullptr : &found->second;
   }
 
   std::mutex mutex;
@@ -376,6 +487,10 @@ class Client {
   std::vector<Ghost> prepared;
   int mode = 0, page = 0, revision = 0, server_revision = 0;
   std::thread worker;
+  std::map<int, LeaderboardPage> leaderboard_pages;
+  int leaderboard_page = 0, leaderboard_total = 0;
+  bool leaderboard_pending = false;
+  std::chrono::steady_clock::time_point leaderboard_manual_after{};
 };
 
 Client& client() { static Client instance; return instance; }
@@ -417,6 +532,10 @@ bool set_server(Server server) {
     c.base = next_server;
     ++c.revision;
     ++c.server_revision;
+    c.leaderboard_pages.clear();
+    c.leaderboard_pending = false;
+    c.leaderboard_page = c.leaderboard_total = 0;
+    c.leaderboard_manual_after = {};
     c.player_name.clear();
     c.player_identified = false;
     c.identity_requested = false;
@@ -446,7 +565,7 @@ int command(int operation, int value, const std::string& category) {
     switch (operation) {
       case 0: return c.mode;
       case 1:
-        c.mode = std::clamp(value, 0, 4); c.config["mode"] = c.mode;
+        c.mode = std::clamp(value, 0, kLastRaceMode); c.config["mode"] = c.mode;
         c.prepared_category.clear(); c.page = 0;
         save_json(c.config_path, c.config); c.refresh(category); return c.mode;
       case 2: c.page = 0; c.refresh(category, true); return 1;
@@ -480,6 +599,19 @@ int command(int operation, int value, const std::string& category) {
       // Called every HUD frame: contact the selected server once per session
       // or server change, not every mission retry. Manual ping can retry errors.
       case 17: return !c.identity_requested && c.ping() ? 1 : 0;
+      case 20:
+        c.leaderboard_page = std::clamp(value, 0, std::max(0, (c.leaderboard_total - 1) / kLeaderboardPageSize));
+        c.leaderboard_refresh(); return c.leaderboard_page;
+      case 21: c.leaderboard_refresh(true); return 1;
+      case 22: return std::max(1, (c.leaderboard_total + kLeaderboardPageSize - 1) / kLeaderboardPageSize);
+      case 23: { const auto* p = c.leaderboard_view(); return p ? static_cast<int>(p->rows.size()) : 0; }
+      case 24: case 25: {
+        const auto* p = c.leaderboard_view();
+        if (!p || value < 0 || value >= static_cast<int>(p->rows.size())) return 0;
+        return operation == 24 ? p->rows[value].own : p->rows[value].place;
+      }
+      case 26: { const auto* p = c.leaderboard_view(); return p && p->valid; }
+      case 27: return c.leaderboard_pending;
       default: return 0;
     }
   } catch (const std::exception& e) { lg::warn("replay client: {}", e.what()); return 0; }
@@ -494,6 +626,29 @@ std::string text(int operation, int index) {
                               c.ping_pending ? "Detecting player..." :
                               "Undetected player - Press L3 + D-pad Down to ping server";
     if (operation == 5) return c.ping_status;
+    if (operation >= 10) {
+      const auto* p = c.leaderboard_view();
+      switch (operation) {
+        case 10: return c.base == kSparkedHostServer ? "SPARKEDHOST / UPLOADED GHOSTS" :
+                        c.base == kLocalhostServer ? "LOCALHOST / UPLOADED GHOSTS" : "CUSTOM SERVER / UPLOADED GHOSTS";
+        case 11: return c.leaderboard_pending ? "Updating standings..." : p ? p->status : "Connecting to leaderboard...";
+        case 12: return p ? p->wr : "--";
+        case 13: return std::to_string(c.leaderboard_total);
+        case 14: return "PAGE " + std::to_string(c.leaderboard_page + 1) + " / " +
+                        std::to_string(std::max(1, (c.leaderboard_total + kLeaderboardPageSize - 1) / kLeaderboardPageSize));
+        default: break;
+      }
+      if (!p || index < 0 || index >= static_cast<int>(p->rows.size())) return "";
+      const auto& row = p->rows[index];
+      switch (operation) {
+        case 20: return std::to_string(row.place);
+        case 21: return row.name;
+        case 22: return row.time;
+        case 23: return row.gap;
+        case 24: return std::to_string(row.points);
+        default: return "";
+      }
+    }
     if (operation == 1 && index >= 0 && index < static_cast<int>(c.catalog.size())) {
       const auto& row = c.catalog.at(index);
       // A display read must not create a null selection for a new mission.

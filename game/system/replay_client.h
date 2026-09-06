@@ -28,6 +28,9 @@ bool set_server(Server server);
 
 // GOAL entry points run on the game thread and share the settings mutex with
 // ImGui. HTTP, parsing, and cache I/O run on a bounded worker with no GOAL pointers.
+// Inventory leaderboard commands: 20 select/tick page, 21 refresh, 22 page count,
+// 23 row count, 24 own-row flag, 25 rank, 26 valid page, 27 pending. Text operations
+// 10-14: server/status/WR/racer count/pagination; 20-24: rank/name/time/gap/points.
 int command(int operation, int value, const std::string& category);
 std::string text(int operation, int index);
 void prepare(const std::string& category);
