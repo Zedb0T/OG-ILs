@@ -109,15 +109,21 @@ Change Race Mode and retry the mission to apply it at the canonical IL start.
 
 | Mode | Selected replay |
 | --- | --- |
-| Default | No completed PB: slowest available **player best**. With a PB: the nearest strictly faster opponent's best. At the top, race your PB. |
+| Default - Two Faster Ghosts | Race the two nearest strictly faster players. Second place gets first and third; first place gets second and third. No PB: the two slowest available player bests. |
 | Race vs Your Best Time | Local fastest completed, non-truncated replay. |
 | Race vs WR | Fastest completed, non-truncated server replay for this mission. |
 | Race vs Your Last Attempt | Local most recent attempt, including failure/unfinished runs. |
 | Custom | Up to eight selected server replays for this mission, played simultaneously. |
+| Race vs Next Faster | Previous single-opponent behavior: no PB selects the slowest player best; otherwise select the nearest strictly faster player, falling back to your PB at the top. |
 
-“Place + 1” means the next **faster** runner here, not the next slower numerical
-rank. Each player occupies one leaderboard place, regardless of upload count.
-Equal times aren't faster; ties use stable upload-time/replay-ID ordering.
+Each player occupies one place, regardless of upload count. The new default
+keeps persisted mode ID 0, so existing Default users get two opponents without
+changing identity or other settings; the old one-opponent policy is mode 5.
+When fewer than two faster opponents exist, fill from the nearest equal/slower
+players, excluding yourself. Fewer than two available opponents means fewer
+ghosts; with no opponents, use your PB if available. Missing replay files are
+skipped without deleting their time records. Equal times aren't treated as
+faster; ties use stable upload-time/replay-ID ordering.
 An empty server cannot invent a ghost: Default falls back to your local PB if
 one exists. WR/Custom show an unavailable status if the service can't be reached.
 Local Best/Last Attempt work without a server. Refresh after starting an offline
@@ -195,7 +201,7 @@ the existing `opengoal-replay` v1–v3 schema. Category names are strict identif
 | `GET /replays?game=jak3&category=...&offset=0&limit=100` | Paginated mission metadata; response contains `replays` and `next_offset`. |
 | `GET /replays/<id>` | Download immutable replay JSON. |
 | `GET /replays/<id>/metadata` | Current name/metadata independent of catalog page. |
-| `GET /selection?category=...&mode=default&player_id=...&best_seconds=...` | Server-side next-faster selection; omit best time if none. Also supports `mode=wr`. |
+| `GET /selection?category=...&mode=two-faster&player_id=...&best_seconds=...` | New two-opponent selection; omit best time if none. `mode=default` retains the legacy single-opponent policy for old clients; `mode=wr` returns the fastest. |
 | `GET /admin` | Tiny name-mapping page. |
 | `GET /admin/players` | List player IDs/names; admin HTTP Basic username/password required. |
 | `POST /admin/players/<id>` | `{display_name: "Zed"}`; admin HTTP Basic username/password required. |

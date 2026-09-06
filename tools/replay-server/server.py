@@ -249,7 +249,7 @@ class Store:
                     "next_offset": offset + limit if len(rows) > limit else None}
 
     def selection(self, category, mode, player_id, best=None):
-        require(mode in ("default", "wr"), "Invalid selection mode")
+        require(mode in ("default", "wr", "two-faster"), "Invalid selection mode")
         require(isinstance(category, str) and IDENTIFIER.fullmatch(category), "Invalid mission")
         require(best is None or number(best, 0, 601), "Invalid best time")
         with self.lock:
@@ -259,6 +259,24 @@ class Store:
             for row in rows:
                 by_player.setdefault(row["player_id"], row)
             ranked = list(by_player.values())
+            if mode == "two-faster":
+                own = by_player.get(player_id)
+                if own:
+                    best = min(best, own["duration_seconds"]) if best is not None else own["duration_seconds"]
+                # Missing replay files can leave rank metadata behind. Keep their
+                # times for the owner's PB, but don't choose unplayable opponents.
+                opponents = [r for r in ranked if r["player_id"] != player_id
+                             and (self.root / r["path"]).is_file()]
+                if best is None:
+                    selected = opponents[-2:]
+                else:
+                    selected = [r for r in opponents if r["duration_seconds"] < best][-2:]
+                    # Second place gets first + third; first gets second + third.
+                    # Equal-time rivals can fill a slot but aren't treated as faster.
+                    selected += [r for r in opponents if r["duration_seconds"] >= best][:2 - len(selected)]
+                if not selected and own and (self.root / own["path"]).is_file():
+                    selected = [own]
+                return {"replays": [self.metadata(r["id"]) for r in selected]}
             selected = None
             if ranked and mode == "wr":
                 selected = ranked[0]

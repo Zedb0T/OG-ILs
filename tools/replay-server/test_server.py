@@ -150,6 +150,51 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.store.selection(cat, "wr", self.player)["replays"], [])
         self.assertEqual(len(self.store.catalog("jak3", cat)["replays"]), 2)
 
+    def test_two_faster_uses_neighbors_and_second_place_straddles(self):
+        cat = replay()["category"]
+        for seconds, pid in ((10, "2" * 32), (20, "3" * 32), (30, "4" * 32), (40, "5" * 32)):
+            self.upload(seconds, pid)
+        self.upload(50, "2" * 32)  # old run is not a separate player
+        self.upload(1, "6" * 32, completed=False)
+        self.upload(2, "7" * 32, truncated=True)
+        pick = lambda best: [r["duration_seconds"] for r in self.store.selection(cat, "two-faster", self.player, best)["replays"]]
+        self.assertEqual(pick(None), [30, 40])
+        self.assertEqual(pick(45), [30, 40])
+        self.assertEqual(pick(35), [20, 30])
+        self.assertEqual(pick(25), [10, 20])
+        self.assertEqual(pick(15), [10, 20])  # local PB would be second: 1st + 3rd
+        self.assertEqual(pick(5), [10, 20])  # first: 2nd + 3rd
+        self.upload(20)
+        picked = self.store.selection(cat, "two-faster", self.player)["replays"]
+        self.assertEqual([r["duration_seconds"] for r in picked], [10, 20])  # tie can fill remaining slot
+        self.assertNotIn(self.player, [r["player_id"] for r in picked])
+        self.assertEqual(pick(15), [10, 20])  # local PB beats stored PB
+        self.assertEqual(pick(25), [10, 20])  # stored PB beats stale local PB
+        self.assertEqual([r["duration_seconds"] for r in self.store.selection(cat, "two-faster", "3" * 32)["replays"]], [10, 20])
+
+    def test_second_place_gets_first_and_third_without_own_ghost(self):
+        cat = replay()["category"]
+        first = self.upload(10, "2" * 32)
+        self.upload(20)
+        third = self.upload(30, "3" * 32)
+        picks = self.store.selection(cat, "two-faster", self.player)["replays"]
+        self.assertEqual([r["id"] for r in picks], [first["id"], third["id"]])
+
+    def test_two_faster_small_boards_and_missing_files(self):
+        cat = replay()["category"]
+        pick = lambda: self.store.selection(cat, "two-faster", self.player)["replays"]
+        self.assertEqual(pick(), [])
+        own = self.upload(20)
+        self.assertEqual([r["id"] for r in pick()], [own["id"]])
+        first = self.upload(10, "2" * 32)
+        self.assertEqual([r["id"] for r in pick()], [first["id"]])
+        missing = self.upload(30, "3" * 32)
+        available = self.upload(40, "4" * 32)
+        relative = self.store.db.execute("SELECT path FROM replays WHERE id=?", (missing["id"],)).fetchone()[0]
+        (self.root / relative).unlink()  # simulate the already observed missing-file case
+        self.assertEqual([r["id"] for r in pick()], [first["id"], available["id"]])
+        self.assertEqual(len(self.store.catalog("jak3", cat)["replays"]), 4)  # no data deletion
+
     def test_own_best_and_empty_leaderboard(self):
         cat = replay()["category"]
         self.assertEqual(self.store.selection(cat, "default", self.player)["replays"], [])
@@ -215,6 +260,18 @@ class HTTPTests(unittest.TestCase):
         except HTTPError as error:
             with error:
                 return error.code, json.load(error)
+
+    def test_two_faster_selection_http_is_backward_compatible(self):
+        for pid, seconds in (("1" * 32, 20), ("2" * 32, 10), ("3" * 32, 30)):
+            self.store.register(pid, "a" * 64)
+            self.store.upload(pid, "a" * 64, json.dumps(replay(seconds)).encode())
+        path = "/selection?category=" + replay()["category"] + "&player_id=" + "1" * 32
+        status, result = self.call(path + "&mode=two-faster")
+        self.assertEqual(status, 200)
+        self.assertEqual([r["duration_seconds"] for r in result["replays"]], [10, 30])
+        self.assertEqual(len(self.call(path + "&mode=default")[1]["replays"]), 1)
+        self.assertEqual(len(self.call(path + "&mode=wr")[1]["replays"]), 1)
+        self.assertEqual(self.call(path + "&mode=invalid")[0], 400)
 
     def test_end_to_end_register_submit_list_retrieve_and_rename(self):
         player, token = "2" * 32, "f" * 64
