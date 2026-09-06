@@ -38,7 +38,9 @@ server. The menu does not start a local server—run the command above first.
 The default `/` page is the public leaderboard, with **Speedrun.com** selected
 and an **Uploaded ghosts** source dropdown. It includes mission-group filters,
 player and mission drill-downs, pagination, and links to `/admin` and `/api`.
-The two sources use independent player/mission IDs and never combine standings.
+These two website choices retain their independent standings. The API also
+offers `source=combined`, used by default in the native game browser, to rank
+uploaded ghost and SRC times together before calculating mission/total points.
 Speedrun.com uses Jak 3 OpenGOAL Missions, Any%, verified single-player runs,
 and each applicable subcategory's default value. Uploaded ghosts are explicitly
 labelled unverified community submissions.
@@ -57,7 +59,7 @@ Read-only JSON endpoints, suitable for a future in-game browser:
 - `/api/v1/players/{player_id}`
 - `/api/v1/scoring` and `/api/v1/status`
 
-Use `source=speedrun|ghosts`, `game=jak3`, `group=all|main|orb|side`,
+Use `source=speedrun|ghosts|combined`, `game=jak3`, `group=all|main|orb|side`,
 `offset=0`, and `limit=50` (maximum 100). Responses include a snapshot revision,
 UTC update time, and pagination. See `/api` for schemas and examples.
 The native pause-menu experiment below also uses this public API.
@@ -71,27 +73,47 @@ total points, missions completed, and WR counts (including tied records).
 **Individual Missions** opens the full API catalog, including missions without
 runs. Select a mission for its best times, gaps to WR, and points.
 
-The browser uses the **uploaded ghosts** source on your selected Ghost Server,
-not a separate hardcoded host. Your saved player ID highlights your row.
+The browser includes **uploaded ghosts + Speedrun.com** on your selected Ghost
+Server by default, not a separate hardcoded host. Press **R2** anywhere in the
+browser to toggle SRC inclusion. Ghost-only mode recalculates the entire scoring
+pool; it does not merely hide SRC rows with combined points still attached.
+The footer shows SRC ON/OFF and `[SRC]` marks SRC runners. The choice persists as
+`leaderboard_include_src` in `ghost-client.json`, independently of ghost race mode.
+Your saved ghost player ID still highlights your row.
+
+Combined standings match known SRC mission titles to native mission IDs (with
+explicit aliases for the four desert hang-time/distance challenges), keeping the
+same mission selected across filters. Future unmatched SRC levels appear under
+`src-<level-id>` rather than being merged into a guessed native course. SRC player
+and run IDs are prefixed `src-`; matching display names never link accounts,
+including seeded test ghosts named after real runners. Each source identity gets
+one fastest eligible time per mission, and ties/ranks/points are recalculated from
+the combined time pool. SRC results remain verified by SRC; uploaded ghosts do
+not become verified by appearing alongside them. This does not invent replay
+files for SRC runs or change race opponent selection.
 Up/down chooses an entry; X opens it; left/right or L1/R1 pages; Square refreshes.
 Triangle returns to the previous page and cursor, then to the native pause menu;
 Start retains normal unpause behavior. Lists and standings show eight rows per page.
 
 The client fetches public metadata only, off the game thread: no registration,
 ping, upload or replay download is needed to open the page. Its cache holds at
-most 512 least-recently-used pages for the current server, keyed by board, group,
+most 512 least-recently-used pages for the current server, keyed by source, board, group,
 mission, and page, with a 60-second TTL, a five-second
 manual-refresh cooldown, and a 15-second retry backoff. Failed or malformed
 responses preserve last-good rows with an offline banner. Visited and prefetched pages are also
 atomically saved to `ghost-cache/servers/<encoded-server>/leaderboards-v1.json`
 under the game's user features directory. Each server has a separate, versioned
-snapshot, capped at 512 pages and 4 MiB, enough for the current complete catalog
-and standings. Existing version-1 snapshots remain compatible.
+snapshot, capped at 512 pages and 4 MiB. Its version-2 envelope stores each page's
+source, so filtering cannot show cached points from the other scoring pool.
+Existing version-1 ghost-only snapshots are restored into the ghost-only pool.
+Both filters retain visited pages offline within the shared LRU budget.
 
 The boot player-status update automatically arms a low-priority background fill.
-After a three-second startup grace period, the worker fetches the four combined
+After a three-second startup grace period, the worker fetches the four points
 boards, the full mission catalog, and individual standings in batches of 96 rows
-(12 native pages). It leaves a one-second gap between batches and works only
+(12 native pages) for the selected source filter. Changing the filter starts a
+fill pass for that source while retaining the other source's cached pages.
+It leaves a one-second gap between batches and works only
 when the regular job queue is empty. Player pings, replay loading/uploads, and
 requested menu pages cancel an in-flight prefetch and run first. Prefetch uses
 only public metadata: no extra registration, ping, upload, or replay download.
@@ -121,7 +143,7 @@ that server's own snapshot, and rejects old in-flight responses. A late response
 navigation only updates its own cache entry, never a different board. Responses are capped
 at 256 KiB and ten seconds; names are sanitized before native font rendering.
 `test_client_leaderboard.py`, `test_client_leaderboard_disk.py`, and
-`test_client_leaderboard_warm.py` run navigation, restart/offline recovery,
+`test_client_leaderboard_warm.py`, and `test_client_leaderboard_sources.py` run navigation, restart/offline recovery,
 background filling, bulk pagination, preemption, cache bounds, and failure checks against temporary
 local fixtures and profiles.
 
@@ -133,6 +155,11 @@ cache returns 503 with retry guidance while the first crawl completes.
 Ghost metadata is cached separately and invalidated on replay or name changes,
 including SQL deletion; player pings do not invalidate it. The SQLite index is
 authoritative: deleting a replay JSON alone does not remove its recorded time.
+Combined standings reuse these snapshots, rebuild only when either source's
+revision changes, and use the same bounded HTTP-response cache. They never
+trigger an additional SRC crawl. A cold SRC cache returns 503 for combined
+requests (the game keeps its last-good combined rows); ghost-only boards remain
+available. Failed SRC refreshes keep the last-good SRC/combined standings.
 
 Public JSON uses ETags and a 15-second HTTP cache; hashed CSS/JS assets are
 immutable. Status, admin, credentials, errors, and legacy client endpoints stay

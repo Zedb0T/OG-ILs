@@ -1,4 +1,4 @@
-"""Public, source-separated IL points and a bounded last-good SRC cache."""
+"""Public IL points, optional combined standings, and a bounded last-good SRC cache."""
 from collections import OrderedDict, defaultdict
 from datetime import datetime, timezone
 import hashlib
@@ -12,7 +12,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-SOURCES = ("speedrun", "ghosts")
+SOURCES = ("speedrun", "ghosts", "combined")
 GROUPS = ("all", "main", "orb", "side")
 SRC_GAME = "j1l7q0zd"  # jak3og_missions
 SRC_CATEGORY = "rkl7n8qd"  # Any%, not Major % Warp
@@ -23,6 +23,13 @@ MAX_CACHE_BYTES = 8 * 1024 * 1024
 MAX_RUNS = 20000
 MISSIONS = json.loads(Path(__file__).with_name("missions.json").read_text(encoding="utf-8"))
 MISSION_NAMES = {m["mission_id"]: m for m in MISSIONS}
+# SRC uses "Challenge" in these four titles; the native mission registry does not.
+SRC_MISSION_ALIASES = {
+    "single hang time challenge (gold)": "desert-bbush-air-time",
+    "total hang time challenge (gold)": "desert-bbush-total-air-time",
+    "single distance challenge (gold)": "desert-bbush-jump-distance",
+    "total distance challenge (gold)": "desert-bbush-total-jump-distance",
+}
 SCORING = {
     "id": "il-points-v1", "podium": [100, 97, 95],
     "remaining_formula": "max(round(94 - (place - 4) * 94 / max(1, total_runners - 3)), 0)",
@@ -32,6 +39,7 @@ SCORING = {
     "counting": "One fastest completed, non-truncated run per player per mission; sum mission points",
     "overall_ties": "Equal point totals share rank; player ID provides stable display order",
     "speedrun_rules": "Jak 3 OpenGOAL Missions, Any%, verified single-player runs, default subcategory values",
+    "combined_rules": "Rank ghost and SRC best times together per native mission, then recalculate points; SRC player IDs use src- prefix. Names never link accounts.",
 }
 
 
@@ -112,6 +120,33 @@ def make_snapshot(missions, runs, updated_at):
     snapshot = {"updated_at": updated_at, "total_players": total_players, "missions": list(by_mission.values())}
     snapshot["revision"] = hashlib.sha256(encoded(snapshot)).hexdigest()[:24]
     return snapshot
+
+
+def combine_snapshots(ghosts, speedrun):
+    """Merge times, not already-awarded points. Keep source identities distinct.
+
+    In particular, seeded test ghosts may deliberately reuse real SRC names.
+    A label is never proof that two accounts belong to the same person.
+    """
+    missions = {m["mission_id"]: {k: v for k, v in m.items() if k != "runs"}
+                for m in ghosts["missions"]}
+    known_labels = {m["label"].casefold(): m["mission_id"] for m in MISSIONS}
+    runs = [{**r, "source": "ghosts"} for m in ghosts["missions"] for r in m["runs"]]
+    for mission in speedrun["missions"]:
+        label = mission["label"].casefold()
+        native_id = known_labels.get(label) or SRC_MISSION_ALIASES.get(label)
+        mission_id = native_id or "src-" + mission["mission_id"]
+        # Unknown future SRC levels remain visible, without guessing an unrelated
+        # native course. Known levels keep stable game mission IDs under either filter.
+        missions.setdefault(mission_id, {**mission, "mission_id": mission_id})
+        missions[mission_id].update(source_url=mission.get("source_url"),
+                                    variants=mission.get("variants", []))
+        for row in mission["runs"]:
+            runs.append({**row, "mission_id": mission_id,
+                         "player_id": "src-" + row["player_id"],
+                         "run_id": "src-" + row["run_id"], "source": "speedrun"})
+    return make_snapshot(list(missions.values()), runs,
+                         min(ghosts["updated_at"], speedrun["updated_at"]))
 
 
 def src_subcategories(variables, level_id):
@@ -306,6 +341,8 @@ class Leaderboards:
         self.speedrun = SpeedrunCache(store.root)
         self.ghost_revision = None
         self.ghost_snapshot = None
+        self.combined_revision = None
+        self.combined_snapshot = None
         self.responses = OrderedDict()
         self.response_bytes = 0
 
@@ -346,6 +383,13 @@ class Leaderboards:
                     snapshot = self.speedrun.snapshot
                 if snapshot is None:
                     raise LeaderboardError("Speedrun.com data is warming up. Please try again shortly.", 503)
+                if source == "combined":
+                    ghosts = self.ghost_data()
+                    revision = (ghosts["revision"], snapshot["revision"])
+                    if revision != self.combined_revision:
+                        self.combined_snapshot = combine_snapshots(ghosts, snapshot)
+                        self.combined_revision = revision
+                    snapshot = self.combined_snapshot
             key = (source, snapshot["revision"], resource, identifier, group, offset, limit)
             if key in self.responses:
                 self.responses.move_to_end(key)

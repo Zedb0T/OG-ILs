@@ -14,7 +14,7 @@ from unittest.mock import patch
 from hosted import Application
 from leaderboards import (CACHE_VERSION, MAX_CACHE_BYTES, MISSIONS, REFRESH_SECONDS,
     SRC_CATEGORY, SRC_GAME, LeaderboardError, SourceRedirects, SpeedrunCache,
-    encoded, fetch_speedrun, make_snapshot, points, src_subcategories, utc_now)
+    combine_snapshots, encoded, fetch_speedrun, make_snapshot, points, src_subcategories, utc_now)
 from leaderboard_http import assets, public_route, response_parts
 from server import APIError, Server, Store, route
 from test_server import replay
@@ -112,6 +112,80 @@ class PublicLeaderboardTests(unittest.TestCase):
 
     def query(self, resource="points", **kwargs):
         return json.loads(self.store.leaderboards.query("ghosts", resource, **kwargs))
+
+    def test_combined_recalculates_places_points_groups_and_keeps_identity_separate(self):
+        self.upload(11)
+        self.store.rename(self.player, "Same Name") # deliberately same as both SRC players
+        self.upload(20, "2" * 32)
+        fetch, _, _ = fake_src()
+        manager = self.store.leaderboards
+        manager.speedrun.refresh(fetch)
+        board = json.loads(manager.query("combined", "mission", "wascity-bbush-get-to-18"))
+        self.assertEqual(board["source"], "combined")
+        self.assertEqual(board["total_players"], 4)
+        self.assertEqual([r["place"] for r in board["items"]], [1, 1, 3, 4])
+        self.assertEqual([r["points"] for r in board["items"]], [100, 100, 95, 94])
+        self.assertEqual([r["source"] for r in board["items"]], ["speedrun", "speedrun", "ghosts", "ghosts"])
+        self.assertEqual({r["player_id"] for r in board["items"]},
+                         {"src-player01", "src-player02", self.player, "2" * 32})
+        self.assertEqual(self.query("mission", identifier="wascity-bbush-get-to-18")["items"][0]["points"], 100)
+        all_board = json.loads(manager.query("combined", "points"))
+        self.assertEqual([p["points"] for p in all_board["items"]], [200, 200, 95, 94])
+        self.assertEqual([p["points"] for p in json.loads(manager.query("combined", "points", group="orb"))["items"]],
+                         [100, 100, 95, 94])
+        catalog = json.loads(manager.query("combined", "missions", limit=100))
+        self.assertEqual(catalog["total"], 131) # mapped SRC levels, not duplicate courses
+        self.assertEqual(json.loads(manager.query("combined", "player", self.player))["player"]["points"], 95)
+
+    def test_combined_cache_depends_on_both_sources_and_retains_last_good_src(self):
+        manager = self.store.leaderboards
+        with self.assertRaises(LeaderboardError) as caught:
+            manager.query("combined", "points")
+        self.assertEqual(caught.exception.status, 503) # never silently label ghost-only data combined
+        self.upload(11)
+        fetch, _, _ = fake_src()
+        manager.speedrun.refresh(fetch)
+        first = manager.query("combined", "points")
+        self.assertIs(first, manager.query("combined", "points"))
+        self.store.ping(self.player, self.token)
+        self.assertIs(first, manager.query("combined", "points"))
+        self.store.rename(self.player, "Changed")
+        renamed = manager.query("combined", "points")
+        self.assertNotEqual(first, renamed)
+        record = self.upload(9)
+        faster = manager.query("combined", "points")
+        self.assertNotEqual(renamed, faster)
+        self.store.db.execute("DELETE FROM replays WHERE id=?", (record["id"],))
+        self.store.db.commit()
+        self.assertNotEqual(faster, manager.query("combined", "points"))
+        def changed(path):
+            data = fetch(path)
+            if path.startswith("/leaderboards/"):
+                data["data"]["runs"][0]["run"]["times"]["primary_t"] = 8
+            return data
+        before = manager.query("combined", "points")
+        manager.speedrun.refresh(changed)
+        after = manager.query("combined", "points")
+        self.assertNotEqual(before, after)
+        def fail(path):
+            raise OSError("offline")
+        manager.speedrun.refresh(fail)
+        self.assertIs(after, manager.query("combined", "points"))
+        self.assertEqual(public_route(self.store, "/api/v1/status?source=combined")[1]["available"], True)
+        self.assertEqual(public_route(self.store, "/api/v1/leaderboards/points?source=combined")[0], 200)
+
+    def test_combined_aliases_unknown_levels_and_does_not_mutate_inputs(self):
+        ghosts = self.store.leaderboards.ghost_data()
+        missions = [{"mission_id": "level001", "label": "Single Hang Time Challenge (Gold)", "group": "side"},
+                    {"mission_id": "level002", "label": "Future SRC Mission", "group": "side"}]
+        runs = [{"mission_id": m["mission_id"], "player_id": "player01", "display_name": "Runner",
+                 "duration_seconds": 15, "run_id": m["mission_id"]} for m in missions]
+        src = make_snapshot(missions, runs, utc_now())
+        before = encoded([ghosts, src])
+        result = combine_snapshots(ghosts, src)
+        self.assertEqual(encoded([ghosts, src]), before)
+        populated = {m["mission_id"] for m in result["missions"] if m["runs"]}
+        self.assertEqual(populated, {"desert-bbush-air-time", "src-level002"})
 
     def test_ghost_dedupe_ties_groups_pagination_and_no_credentials(self):
         for pid, seconds in ((self.player, 10), ("2" * 32, 10), ("3" * 32, 12)):

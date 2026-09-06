@@ -25,11 +25,11 @@ def public_route(store, target):
     get = lambda key, default: query.get(key, [default])[0]
     source, game, group = get("source", "speedrun"), get("game", "jak3"), get("group", "all")
     if source not in SOURCES or group not in GROUPS or game != "jak3":
-        raise LeaderboardError("Supported game: jak3; sources: speedrun, ghosts; groups: all, main, orb, side")
+        raise LeaderboardError("Supported game: jak3; sources: speedrun, ghosts, combined; groups: all, main, orb, side")
     if path == "/api/v1/scoring":
         return 200, {"api_version": 1, "scoring": SCORING, "sources": list(SOURCES)}, "application/json"
     if path == "/api/v1/status":
-        status = store.leaderboards.speedrun.status() if source == "speedrun" else {
+        status = store.leaderboards.speedrun.status() if source in ("speedrun", "combined") else {
             "available": True, "refreshing": False, "stale": False, "message": None}
         return 200, {"api_version": 1, "game": game, "source": source, **status}, "application/json"
     try:
