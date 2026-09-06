@@ -82,12 +82,28 @@ ping, upload or replay download is needed to open the page. Its cache holds at
 most 32 least-recently-used pages for the current server, keyed by board, group,
 mission, and page, with a 60-second TTL, a five-second
 manual-refresh cooldown, and a 15-second retry backoff. Failed or malformed
-responses preserve last-good rows with an offline banner. Switching servers
-clears those pages and rejects old in-flight responses. A late response after
+responses preserve last-good rows with an offline banner. Visited pages are also
+atomically saved to `ghost-cache/servers/<encoded-server>/leaderboards-v1.json`
+under the game's user features directory. Each server has a separate, versioned
+snapshot, capped at 32 pages and 1 MiB. This is a visited-page cache, not a
+background download of every leaderboard.
+
+On startup or a server switch, the worker restores the saved pages before any
+leaderboard HTTP request. Opening a saved board shows its old rows immediately
+while a background refresh runs; `UPDATING / Cached 2h ago` or
+`OFFLINE / Cached 2h ago` indicates the age since its last successful fetch.
+Old snapshots remain usable offline; failed requests never replace them.
+Disk reads, validation, serialization, and atomic writes stay off the game
+thread. Corrupt, incompatible, oversized, or wrong-server files are ignored;
+failed cache writes do not hide fresh online standings. Only validated public
+metadata is saved, not tokens or replay files; the YOU highlight is recalculated
+from the current player ID. Switching servers clears the live pages, restores
+that server's own snapshot, and rejects old in-flight responses. A late response after
 navigation only updates its own cache entry, never a different board. Responses are capped
 at 256 KiB and ten seconds; names are sanitized before native font rendering.
-`test_client_leaderboard.py` runs the paging/cache/failure integration checks
-against a temporary local fixture and profile.
+`test_client_leaderboard.py` and `test_client_leaderboard_disk.py` run navigation,
+restart/offline recovery, cache bounds, and failure checks against temporary
+local fixtures and profiles.
 
 Speedrun.com refreshes hourly in one background worker, paced at 48 requests
 per minute. Page views never trigger upstream crawls. A complete last-good

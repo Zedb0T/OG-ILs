@@ -33,6 +33,8 @@ constexpr int kCustomLimit = 8;
 constexpr int kLastRaceMode = 5;
 constexpr size_t kSnapshotBudget = 64 * 1024 * 1024;
 constexpr int kLeaderboardPageSize = 8;
+constexpr size_t kLeaderboardCachePages = 32;
+constexpr size_t kLeaderboardCacheBytes = 1024 * 1024;
 constexpr const char* kLeaderboardGroups[] = {"all", "main", "orb", "side"};
 constexpr const char* kLeaderboardTitles[] = {
     "All Missions", "Main Missions", "Orb Searches", "Other Side Missions", "Individual Missions"};
@@ -63,9 +65,25 @@ struct LeaderboardPage {
   std::string wr = "--", status;
   int total = 0, ranked_missions = 0;
   bool valid = false;
+  bool from_disk = false, offline = false;
+  int64_t fetched_at = 0;
+  LeaderboardLocation location;
+  json data; // validated, public fields only; also used to revalidate disk loads
   uint64_t used = 0;
   std::chrono::steady_clock::time_point retry_after{};
 };
+
+int64_t leaderboard_now() {
+  return std::chrono::duration_cast<std::chrono::seconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count();
+}
+std::string leaderboard_age(int64_t stamp) {
+  const auto age = std::max<int64_t>(0, leaderboard_now() - stamp);
+  if (age < 60) return std::to_string(age) + "s";
+  if (age < 3600) return std::to_string(age / 60) + "m";
+  if (age < 86400) return std::to_string(age / 3600) + "h";
+  return std::to_string(age / 86400) + "d";
+}
 
 bool category_ok(const std::string& value) {
   return std::regex_match(value, std::regex("[A-Za-z0-9_-]{1,96}"));
@@ -193,6 +211,110 @@ std::string request(const std::string& base, const std::string& path,
   return response.contents;
 }
 
+LeaderboardPage parse_leaderboard(const json& data, const LeaderboardLocation& location,
+                                  const std::string& player) {
+  LeaderboardPage result;
+  if (data.at("api_version") != 1 || data.at("source") != "ghosts" ||
+      data.at("game") != "jak3" || data.at("group") != kLeaderboardGroups[location.group] ||
+      data.at("offset") != location.page * kLeaderboardPageSize ||
+      !data.at("items").is_array() || data.at("items").size() > kLeaderboardPageSize)
+    throw std::runtime_error("Unexpected leaderboard response");
+  result.total = leaderboard_int(data, "total", location.screen == 2 ? 512 : 1000000);
+  result.ranked_missions = leaderboard_int(data, "ranked_missions", 512);
+  if (data.at("items").size() != static_cast<size_t>(std::clamp(
+          result.total - location.page * kLeaderboardPageSize, 0, kLeaderboardPageSize)))
+    throw std::runtime_error("Incomplete leaderboard page");
+  const auto read_record = [](const json& value) {
+    const auto seconds = value.is_null() ? 0.0f : value.get<float>();
+    if (!std::isfinite(seconds) || seconds < 0 || seconds > 601)
+      throw std::runtime_error("Invalid leaderboard record");
+    return seconds;
+  };
+  float wr = 0;
+  if (location.screen == 3) {
+    const auto& mission = data.at("mission");
+    if (mission.at("mission_id") != location.mission ||
+        (result.total > 0 && mission.at("wr_seconds").is_null()))
+      throw std::runtime_error("Unexpected leaderboard mission");
+    wr = read_record(mission.at("wr_seconds"));
+    if (!mission.at("wr_seconds").is_null()) result.wr = time_label(wr);
+  }
+  for (const auto& item : data.at("items")) {
+    LeaderboardRow row;
+    if (location.screen == 2) {
+      row.mission = item.at("mission_id").get<std::string>();
+      row.group = item.at("group").get<std::string>();
+      if (!category_ok(row.mission) || (row.group != "main" && row.group != "orb" && row.group != "side") ||
+          std::any_of(result.rows.begin(), result.rows.end(), [&](const auto& r) { return r.mission == row.mission; }))
+        throw std::runtime_error("Invalid mission catalog row");
+      row.name = leaderboard_label(item.at("label").get<std::string>(), 64);
+      row.count = leaderboard_int(item, "player_count", 1000000);
+      const auto seconds = read_record(item.at("wr_seconds"));
+      if (row.count > 0 && item.at("wr_seconds").is_null())
+        throw std::runtime_error("Missing mission record");
+      row.time = item.at("wr_seconds").is_null() ? "--" : time_label(seconds);
+      result.rows.push_back(std::move(row));
+      continue;
+    }
+    row.place = leaderboard_int(item, location.screen == 1 ? "rank" : "place", result.total);
+    row.points = leaderboard_int(item, "points", location.screen == 1 ? 51200 : 100);
+    const auto pid = item.at("player_id").get<std::string>();
+    if (!id_ok(pid) || row.place < 1)
+      throw std::runtime_error("Invalid leaderboard row");
+    row.own = pid == player;
+    row.name = leaderboard_label(item.at("display_name").get<std::string>(), 23);
+    if (location.screen == 1) {
+      row.count = leaderboard_int(item, "mission_count", 512);
+      row.records = leaderboard_int(item, "tied_wr_count", row.count) +
+                    leaderboard_int(item, "untied_wr_count", row.count);
+      if (row.records > row.count || row.points > row.count * 100)
+        throw std::runtime_error("Invalid aggregate standings");
+    } else {
+      const auto duration = item.at("duration_seconds").get<float>();
+      if (!std::isfinite(duration) || duration < wr || duration > 601)
+        throw std::runtime_error("Invalid leaderboard time");
+      row.time = time_label(duration);
+      row.gap = duration == wr ? "WR" : "+" + time_label(duration - wr);
+    }
+    result.rows.push_back(std::move(row));
+  }
+
+  // Persist only fields the native browser understands, never unknown response
+  // fields, credentials, replay payloads, or a cached identity-dependent YOU flag.
+  result.location = location;
+  result.data = {{"api_version", 1}, {"source", "ghosts"}, {"game", "jak3"},
+                 {"group", kLeaderboardGroups[location.group]},
+                 {"offset", location.page * kLeaderboardPageSize},
+                 {"total", result.total}, {"ranked_missions", result.ranked_missions},
+                 {"items", json::array()}};
+  if (location.screen == 3)
+    result.data["mission"] = {{"mission_id", location.mission},
+                             {"wr_seconds", data.at("mission").at("wr_seconds")}};
+  for (size_t i = 0; i < result.rows.size(); ++i) {
+    const auto& row = result.rows[i];
+    const auto& item = data.at("items").at(i);
+    json stored;
+    if (location.screen == 2) {
+      stored = {{"mission_id", row.mission}, {"group", row.group}, {"label", row.name},
+                {"player_count", row.count}, {"wr_seconds", item.at("wr_seconds")}};
+    } else {
+      stored = {{"player_id", item.at("player_id")}, {"display_name", row.name}, {"points", row.points}};
+      if (location.screen == 1) {
+        stored["rank"] = row.place;
+        stored["mission_count"] = row.count;
+        stored["tied_wr_count"] = item.at("tied_wr_count");
+        stored["untied_wr_count"] = item.at("untied_wr_count");
+      } else {
+        stored["place"] = row.place;
+        stored["duration_seconds"] = item.at("duration_seconds");
+      }
+    }
+    result.data["items"].push_back(std::move(stored));
+  }
+  result.valid = true;
+  return result;
+}
+
 class Client {
  public:
   Client() : root(file_util::get_user_features_dir(GameVersion::Jak3)), config_path(root / "ghost-client.json") {
@@ -219,6 +341,8 @@ class Client {
       config["custom"] = custom;
       save_json(config_path, config);
     }
+    // Restore before any boot ping or network job, without disk I/O on GOAL.
+    leaderboard_restore();
     worker = std::thread([this] { work(); });
   }
   ~Client() {
@@ -423,11 +547,93 @@ class Client {
     });
   }
 
+  // All cache file I/O is worker-owned. The envelope binds its public metadata
+  // to the exact server and protocol, even if a file is copied to another host's
+  // directory. Invalid snapshots are ignored as a unit, not partially loaded.
+  void leaderboard_restore() { // caller owns mutex (or is the constructor)
+    if (leaderboard_cache_revision == server_revision || leaderboard_cache_loading || jobs.size() >= 8) return;
+    const auto server = base;
+    const auto generation = server_revision;
+    enqueue([this, server, generation] {
+      std::map<std::string, LeaderboardPage> restored;
+      uint64_t used = 0;
+      try {
+        const auto path = cache_directory(server) / "leaderboards-v1.json";
+        std::ifstream file(path, std::ios::binary);
+        if (file) {
+          // Bounded read, including if the file grows between opening and read.
+          std::string raw(kLeaderboardCacheBytes + 1, '\0');
+          file.read(raw.data(), static_cast<std::streamsize>(raw.size()));
+          if (file.bad() || file.gcount() > static_cast<std::streamsize>(kLeaderboardCacheBytes))
+            throw std::runtime_error("Leaderboard cache too large or unreadable");
+          raw.resize(static_cast<size_t>(file.gcount()));
+          const auto envelope = json::parse(raw);
+          if (envelope.at("version") != 1 || envelope.at("server") != server ||
+              envelope.at("source") != "ghosts" || envelope.at("game") != "jak3" ||
+              envelope.at("page_size") != kLeaderboardPageSize || !envelope.at("pages").is_array() ||
+              envelope.at("pages").size() > kLeaderboardCachePages)
+            throw std::runtime_error("Incompatible leaderboard cache");
+          for (const auto& entry : envelope.at("pages")) {
+            const auto& stored = entry.at("location");
+            LeaderboardLocation location;
+            location.screen = leaderboard_int(stored, "screen", 3);
+            location.group = leaderboard_int(stored, "group", 3);
+            location.page = leaderboard_int(stored, "page", 124999);
+            location.mission = stored.at("mission").get<std::string>();
+            if (location.screen < 1 ||
+                (location.screen != 1 && location.group != 0) ||
+                (location.screen == 3 ? !category_ok(location.mission) : !location.mission.empty()) ||
+                (location.screen == 2 && location.page >= 512 / kLeaderboardPageSize))
+              throw std::runtime_error("Invalid cached leaderboard location");
+            const auto& fetched = entry.at("fetched_at");
+            if (!fetched.is_number_integer() || fetched <= 0 || fetched > leaderboard_now() + 300)
+              throw std::runtime_error("Invalid cached leaderboard timestamp");
+            auto page = parse_leaderboard(entry.at("data"), location, player);
+            page.fetched_at = fetched.get<int64_t>();
+            page.from_disk = true;
+            page.used = ++used;
+            // Always refresh on the first visit this session, regardless of
+            // wall-clock age. Last-good data remains usable however old it is.
+            if (!restored.emplace(location.key(), std::move(page)).second)
+              throw std::runtime_error("Duplicate cached leaderboard page");
+          }
+        }
+      } catch (const std::exception&) {
+        restored.clear();
+        lg::warn("Ignoring invalid or unreadable leaderboard disk cache");
+      }
+      std::lock_guard lock(mutex);
+      if (generation != server_revision) return;
+      leaderboard_pages = std::move(restored);
+      leaderboard_cache_clock = used;
+      leaderboard_cache_revision = generation;
+      leaderboard_cache_loading = false;
+      leaderboard_visit(); // publish cached rows before queueing a fresh GET
+    });
+    leaderboard_cache_loading = true;
+  }
+
+  json leaderboard_disk_snapshot(const std::string& server) const { // caller owns mutex
+    std::vector<const LeaderboardPage*> ordered;
+    for (const auto& [key, page] : leaderboard_pages) if (page.valid) ordered.push_back(&page);
+    std::sort(ordered.begin(), ordered.end(), [](const auto* a, const auto* b) { return a->used < b->used; });
+    json entries = json::array();
+    for (const auto* page : ordered) {
+      const auto& location = page->location;
+      entries.push_back({{"location", {{"screen", location.screen}, {"group", location.group},
+                                     {"page", location.page}, {"mission", location.mission}}},
+                         {"fetched_at", page->fetched_at}, {"data", page->data}});
+    }
+    return {{"version", 1}, {"server", server}, {"source", "ghosts"}, {"game", "jak3"},
+            {"page_size", kLeaderboardPageSize}, {"pages", std::move(entries)}};
+  }
+
   // Inventory's read-only leaderboard uses the same bounded worker, never the
   // GOAL thread. Cache keys include board/group/mission/page; switching views
   // during a request cannot publish that response into the new view. 32 LRU
   // pages, 60s TTL, 15s failure backoff, 5s manual refresh cooldown.
   void leaderboard_refresh(bool force = false) { // caller owns mutex
+    if (leaderboard_cache_revision != server_revision) { leaderboard_restore(); return; }
     if (leaderboard.screen == 0) return;
     const auto now = std::chrono::steady_clock::now();
     const auto found = leaderboard_pages.find(leaderboard.key());
@@ -447,71 +653,8 @@ class Client {
             kLeaderboardGroups[location.group] + "&limit=" + std::to_string(kLeaderboardPageSize) +
             "&offset=" + std::to_string(location.page * kLeaderboardPageSize));
         if (raw.size() > 256 * 1024) throw std::runtime_error("Leaderboard response too large");
-        const auto data = json::parse(raw);
-        if (data.at("api_version") != 1 || data.at("source") != "ghosts" ||
-            data.at("game") != "jak3" || data.at("group") != kLeaderboardGroups[location.group] ||
-            data.at("offset") != location.page * kLeaderboardPageSize ||
-            !data.at("items").is_array() || data.at("items").size() > kLeaderboardPageSize)
-          throw std::runtime_error("Unexpected leaderboard response");
-        result.total = leaderboard_int(data, "total", location.screen == 2 ? 512 : 1000000);
-        result.ranked_missions = leaderboard_int(data, "ranked_missions", 512);
-        if (data.at("items").size() != static_cast<size_t>(std::clamp(
-                result.total - location.page * kLeaderboardPageSize, 0, kLeaderboardPageSize)))
-          throw std::runtime_error("Incomplete leaderboard page");
-        const auto read_record = [](const json& value) {
-          const auto seconds = value.is_null() ? 0.0f : value.get<float>();
-          if (!std::isfinite(seconds) || seconds < 0 || seconds > 601)
-            throw std::runtime_error("Invalid leaderboard record");
-          return seconds;
-        };
-        float wr = 0;
-        if (location.screen == 3) {
-          const auto& mission = data.at("mission");
-          if (mission.at("mission_id") != location.mission ||
-              (result.total > 0 && mission.at("wr_seconds").is_null()))
-            throw std::runtime_error("Unexpected leaderboard mission");
-          wr = read_record(mission.at("wr_seconds"));
-          if (!mission.at("wr_seconds").is_null()) result.wr = time_label(wr);
-        }
-        for (const auto& item : data.at("items")) {
-          LeaderboardRow row;
-          if (location.screen == 2) {
-            row.mission = item.at("mission_id").get<std::string>();
-            row.group = item.at("group").get<std::string>();
-            if (!category_ok(row.mission) || (row.group != "main" && row.group != "orb" && row.group != "side") ||
-                std::any_of(result.rows.begin(), result.rows.end(), [&](const auto& r) { return r.mission == row.mission; }))
-              throw std::runtime_error("Invalid mission catalog row");
-            row.name = leaderboard_label(item.at("label").get<std::string>(), 64);
-            row.count = leaderboard_int(item, "player_count", 1000000);
-            const auto seconds = read_record(item.at("wr_seconds"));
-            if (row.count > 0 && item.at("wr_seconds").is_null())
-              throw std::runtime_error("Missing mission record");
-            row.time = item.at("wr_seconds").is_null() ? "--" : time_label(seconds);
-            result.rows.push_back(std::move(row));
-            continue;
-          }
-          row.place = leaderboard_int(item, location.screen == 1 ? "rank" : "place", result.total);
-          row.points = leaderboard_int(item, "points", location.screen == 1 ? 51200 : 100);
-          const auto pid = item.at("player_id").get<std::string>();
-          if (!id_ok(pid) || row.place < 1)
-            throw std::runtime_error("Invalid leaderboard row");
-          row.own = pid == player;
-          row.name = leaderboard_label(item.at("display_name").get<std::string>(), 23);
-          if (location.screen == 1) {
-            row.count = leaderboard_int(item, "mission_count", 512);
-            row.records = leaderboard_int(item, "tied_wr_count", row.count) +
-                          leaderboard_int(item, "untied_wr_count", row.count);
-            if (row.records > row.count || row.points > row.count * 100)
-              throw std::runtime_error("Invalid aggregate standings");
-          } else {
-            const auto duration = item.at("duration_seconds").get<float>();
-            if (!std::isfinite(duration) || duration < wr || duration > 601)
-              throw std::runtime_error("Invalid leaderboard time");
-            row.time = time_label(duration);
-            row.gap = duration == wr ? "WR" : "+" + time_label(duration - wr);
-          }
-          result.rows.push_back(std::move(row));
-        }
+        result = parse_leaderboard(json::parse(raw), location, player);
+        result.fetched_at = leaderboard_now();
         result.valid = true;
         result.status = "LIVE STANDINGS  /  60s cache";
         result.retry_after = std::chrono::steady_clock::now() + std::chrono::seconds(60);
@@ -520,26 +663,43 @@ class Client {
         result.status = "Offline - press Square to retry";
         result.retry_after = std::chrono::steady_clock::now() + std::chrono::seconds(15);
       }
-      std::lock_guard lock(mutex);
-      if (generation != server_revision) return;
-      leaderboard_pending = false;
-      auto previous = leaderboard_pages.find(location.key());
-      if (!result.valid && previous != leaderboard_pages.end() && previous->second.valid) {
-        previous->second.status = "OFFLINE  /  Showing cached standings";
-        previous->second.retry_after = result.retry_after;
-      } else {
-        if (result.valid && leaderboard.board_key() == location.board_key()) {
-          leaderboard.total = result.total;
-          leaderboard.page = std::min(leaderboard.page, leaderboard_page_count() - 1);
-          if (leaderboard.page == location.page)
-            leaderboard.cursor = std::min(leaderboard.cursor, std::max(0, static_cast<int>(result.rows.size()) - 1));
+      json snapshot;
+      {
+        std::lock_guard lock(mutex);
+        if (generation != server_revision) return;
+        const auto save = result.valid;
+        auto previous = leaderboard_pages.find(location.key());
+        if (!result.valid && previous != leaderboard_pages.end() && previous->second.valid) {
+          previous->second.offline = true;
+          previous->second.retry_after = result.retry_after;
+        } else {
+          if (result.valid && leaderboard.board_key() == location.board_key()) {
+            leaderboard.total = result.total;
+            leaderboard.page = std::min(leaderboard.page, leaderboard_page_count() - 1);
+            if (leaderboard.page == location.page)
+              leaderboard.cursor = std::min(leaderboard.cursor, std::max(0, static_cast<int>(result.rows.size()) - 1));
+          }
+          if (leaderboard_pages.size() >= kLeaderboardCachePages && previous == leaderboard_pages.end())
+            leaderboard_pages.erase(std::min_element(leaderboard_pages.begin(), leaderboard_pages.end(),
+                [](const auto& a, const auto& b) { return a.second.used < b.second.used; }));
+          result.used = ++leaderboard_cache_clock;
+          leaderboard_pages[location.key()] = std::move(result);
         }
-        if (leaderboard_pages.size() >= 32 && previous == leaderboard_pages.end())
-          leaderboard_pages.erase(std::min_element(leaderboard_pages.begin(), leaderboard_pages.end(),
-              [](const auto& a, const auto& b) { return a.second.used < b.second.used; }));
-        result.used = ++leaderboard_cache_clock;
-        leaderboard_pages[location.key()] = std::move(result);
+        if (save) snapshot = leaderboard_disk_snapshot(server);
       }
+      if (!snapshot.is_null()) {
+        try {
+          // Atomic replacement preserves the previous file if saving fails.
+          // A full/read-only disk must not turn a successful GET into an error.
+          if (snapshot.dump(2).size() > kLeaderboardCacheBytes)
+            throw std::runtime_error("Leaderboard disk snapshot too large");
+          save_json(cache_directory(server) / "leaderboards-v1.json", snapshot);
+        } catch (const std::exception&) {
+          lg::warn("Cannot save leaderboard disk cache; live standings remain available");
+        }
+      }
+      std::lock_guard lock(mutex);
+      if (generation == server_revision) leaderboard_pending = false;
     });
     leaderboard_pending = true;
     leaderboard_manual_after = now + std::chrono::seconds(5);
@@ -608,6 +768,8 @@ class Client {
   std::vector<LeaderboardLocation> leaderboard_history;
   uint64_t leaderboard_cache_clock = 0;
   bool leaderboard_pending = false;
+  bool leaderboard_cache_loading = false;
+  int leaderboard_cache_revision = -1;
   std::chrono::steady_clock::time_point leaderboard_manual_after{};
 };
 
@@ -652,6 +814,8 @@ bool set_server(Server server) {
     ++c.server_revision;
     c.leaderboard_pages.clear();
     c.leaderboard_pending = false;
+    c.leaderboard_cache_loading = false;
+    c.leaderboard_restore();
     c.leaderboard = {};
     c.leaderboard_history.clear();
     c.leaderboard_manual_after = {};
@@ -737,7 +901,7 @@ int command(int operation, int value, const std::string& category) {
         return operation == 24 ? p->rows[value].own : p->rows[value].place;
       }
       case 26: { const auto* p = c.leaderboard_view(); return p && p->valid; }
-      case 27: return c.leaderboard_pending;
+      case 27: return c.leaderboard_pending || c.leaderboard_cache_loading;
       case 28: // Open at the five choices, keeping the read-only cache warm.
         c.leaderboard = {}; c.leaderboard_history.clear(); return 1;
       case 29: return c.leaderboard.screen;
@@ -781,8 +945,13 @@ std::string text(int operation, int index) {
       switch (operation) {
         case 10: return c.base == kSparkedHostServer ? "SPARKEDHOST / UPLOADED GHOSTS" :
                         c.base == kLocalhostServer ? "LOCALHOST / UPLOADED GHOSTS" : "CUSTOM SERVER / UPLOADED GHOSTS";
-        case 11: return c.leaderboard.screen == 0 ? "Choose a board to explore" :
-                       c.leaderboard_pending ? "Updating standings..." : p ? p->status : "Connecting to leaderboard...";
+        case 11:
+          if (c.leaderboard.screen == 0) return "Choose a board to explore";
+          if (p && p->valid && (c.leaderboard_pending || p->from_disk || p->offline))
+            return std::string(c.leaderboard_pending ? "UPDATING" : p->offline ? "OFFLINE" : "SAVED") +
+                   " / Cached " + leaderboard_age(p->fetched_at) + " ago";
+          return c.leaderboard_pending ? "Updating standings..." : p ? p->status :
+                 c.leaderboard_cache_loading ? "Loading saved standings..." : "Connecting to leaderboard...";
         case 12: return c.leaderboard.screen == 1 ? (p ? std::to_string(p->ranked_missions) : "--") :
                        c.leaderboard.screen == 2 ? std::to_string(c.leaderboard.total) : p ? p->wr : "--";
         case 13: return std::to_string(c.leaderboard.total);

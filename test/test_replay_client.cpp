@@ -97,6 +97,7 @@ TEST(ReplayClient, InventoryLeaderboardIsPagedCachedAndReadOnly) {
   EXPECT_EQ(replay_client::command(29, 0, ""), 0);
   EXPECT_EQ(replay_client::command(32, 0, ""), 0); // home lets Triangle exit natively
   EXPECT_EQ(replay_client::command(20, -10, ""), 0);
+  wait(); // background disk restore, even though home makes no HTTP request
   EXPECT_EQ(replay_client::command(27, 0, ""), 0); // home makes no request
   for (int i = 0; i < 4; ++i) replay_client::command(30, 1, "");
   ASSERT_EQ(replay_client::command(31, 0, ""), 1);
@@ -132,7 +133,7 @@ TEST(ReplayClient, InventoryLeaderboardIsPagedCachedAndReadOnly) {
     std::this_thread::sleep_for(std::chrono::milliseconds(5100));
     replay_client::command(21, 0, "");
     wait();
-    EXPECT_EQ(replay_client::text(11, 0), "OFFLINE  /  Showing cached standings");
+    EXPECT_EQ(replay_client::text(11, 0).find("OFFLINE / Cached "), 0u);
     EXPECT_EQ(replay_client::command(23, 0, ""), 8);
     EXPECT_EQ(replay_client::text(21, 0), "Record Holder");
     for (int i = 0; i < 100; ++i) replay_client::command(20, 0, "");
@@ -205,6 +206,69 @@ TEST(ReplayClient, InventoryLeaderboardIsPagedCachedAndReadOnly) {
   EXPECT_EQ(replay_client::command(23, 0, ""), 0);
   EXPECT_EQ(replay_client::command(26, 0, ""), 0);
   EXPECT_EQ(replay_client::text(12, 0), "--");
+}
+
+TEST(ReplayClient, LeaderboardDiskCacheAcrossSessions) {
+  const auto* profile = std::getenv("OG_LEADERBOARD_DISK_PROFILE");
+  const auto* mode = std::getenv("OG_LEADERBOARD_DISK_MODE");
+  if (!profile || !mode) GTEST_SKIP() << "Run the isolated disk-cache harness";
+  file_util::override_user_config_dir(fs::path(profile), true);
+  const std::string phase(mode);
+  const auto wait = [] {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(6);
+    while (replay_client::command(27, 0, "") && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    ASSERT_EQ(replay_client::command(27, 0, ""), 0);
+  };
+  replay_client::command(28, 0, "");
+  if (phase == "rejected") {
+    wait();
+    EXPECT_EQ(replay_client::command(23, 0, ""), 0);
+  }
+  replay_client::command(31, 0, ""); // All points, immediately after startup
+  if (phase == "offline") {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (!replay_client::command(26, 0, "") && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    ASSERT_EQ(replay_client::text(21, 0), "Disk Runner"); // before slow HTTP finishes
+    EXPECT_EQ(replay_client::command(27, 0, ""), 1);
+    EXPECT_EQ(replay_client::text(11, 0), "UPDATING / Cached 2h ago");
+    EXPECT_EQ(replay_client::command(24, 0, ""), 0); // new profile ID, not serialized YOU
+  }
+  wait();
+  if (phase == "rejected") {
+    EXPECT_EQ(replay_client::command(26, 0, ""), 0);
+    EXPECT_EQ(replay_client::command(23, 0, ""), 0);
+    return;
+  }
+  ASSERT_EQ(replay_client::command(26, 0, ""), 1);
+  if (phase == "evict") {
+    for (int page = 1; page < 36; ++page) {
+      if (page == 32) { replay_client::command(20, 0, ""); wait(); } // keep first page hot
+      EXPECT_EQ(replay_client::command(20, page, ""), page);
+      wait();
+      EXPECT_EQ(replay_client::command(23, 0, ""), 8);
+    }
+    return;
+  }
+  const auto live = phase == "updated";
+  EXPECT_EQ(replay_client::text(21, 0), live ? "Live Runner" : "Disk Runner");
+  EXPECT_EQ(replay_client::text(22, 0), live ? "199" : "197");
+  if (phase == "offline") {
+    EXPECT_EQ(replay_client::text(11, 0), "OFFLINE / Cached 2h ago");
+    for (int i = 0; i < 100; ++i) replay_client::command(20, -1, "");
+    EXPECT_EQ(replay_client::command(27, 0, ""), 0); // no per-frame write or retry
+  }
+  replay_client::command(32, 0, "");
+  for (int i = 0; i < 4; ++i) replay_client::command(30, 1, "");
+  replay_client::command(31, 0, "");
+  wait();
+  ASSERT_EQ(replay_client::text(21, 0), "Disk Mission");
+  replay_client::command(31, 0, "");
+  wait();
+  ASSERT_EQ(replay_client::command(29, 0, ""), 3);
+  EXPECT_EQ(replay_client::text(12, 0), live ? "6.500s" : "7.500s");
+  EXPECT_EQ(replay_client::text(21, 0), live ? "Live Runner" : "Disk Runner");
 }
 
 TEST(ReplayClient, ServerSelectionPersistsWithoutChangingIdentityOrRaceMode) {
