@@ -35,7 +35,7 @@ class LeaderboardDiskTests(unittest.TestCase):
                 reply = {"api_version": 1, "game": "jak3", "source": "ghosts", "group": "all",
                          "offset": offset, "ranked_missions": 2, "total": 1, "unexpected": "must-not-persist"}
                 if parts.path == "/api/v1/leaderboards/points":
-                    reply["total"] = 320 if mode == "evict" else 1
+                    reply["total"] = 4800 if mode == "evict" else 1
                     reply["items"] = [{"rank": i + 1, "player_id": "a" * 32 if i == 0 else f"{i:032x}",
                                        "display_name": name, "points": 199 if live else 197, "mission_count": 2,
                                        "tied_wr_count": 0, "untied_wr_count": 1, "Authorization": "must-not-persist"}
@@ -85,7 +85,7 @@ class LeaderboardDiskTests(unittest.TestCase):
                     run("populate")
                     saved = json.loads(cache.read_bytes())
                     self.assertEqual(len(saved["pages"]), 3) # points, catalog, mission
-                    self.assertLess(cache.stat().st_size, 1024 * 1024)
+                    self.assertLess(cache.stat().st_size, 4 * 1024 * 1024)
                     for forbidden in ("player_token", "Authorization", "must-not-persist", "b" * 64, '"own"'):
                         self.assertNotIn(forbidden, cache.read_text())
                     self.assertFalse(cache.with_suffix(".json.tmp").exists())
@@ -101,7 +101,7 @@ class LeaderboardDiskTests(unittest.TestCase):
                     self.assertEqual(cache.read_bytes(), original) # failed GETs never overwrite last-good
 
                     # Invalid envelopes, rows and unbounded snapshots are ignored safely.
-                    invalid = [b'{"version":', b"x" * (1024 * 1024 + 1)]
+                    invalid = [b'{"version":', b"x" * (4 * 1024 * 1024 + 1)]
                     for key, value in (("version", 99), ("server", "https://other.example"),
                                        ("source", "speedrun"), ("game", "jak1"), ("page_size", 100)):
                         damaged = copy.deepcopy(saved)
@@ -115,7 +115,7 @@ class LeaderboardDiskTests(unittest.TestCase):
                     damaged["pages"][0]["location"]["group"] = 999
                     invalid.append(json.dumps(damaged).encode())
                     damaged = copy.deepcopy(saved)
-                    damaged["pages"] *= 11
+                    damaged["pages"] = [damaged["pages"][0]] * 513
                     invalid.append(json.dumps(damaged).encode())
                     damaged = copy.deepcopy(saved)
                     damaged["pages"].append(damaged["pages"][0])
@@ -142,14 +142,26 @@ class LeaderboardDiskTests(unittest.TestCase):
                     self.assertIn("Live Runner", cache.read_text())
                     self.assertGreater(updated["pages"][0]["fetched_at"], saved["pages"][0]["fetched_at"])
 
-                    cache.unlink()
+                    # Start at capacity without hundreds of HTTP calls or disk rewrites.
+                    capacity = copy.deepcopy(saved)
+                    template = copy.deepcopy(saved["pages"][0])
+                    capacity["pages"] = []
+                    for page in range(512):
+                        entry = copy.deepcopy(template)
+                        entry["location"]["page"] = page
+                        entry["data"].update(offset=page * 8, total=4800, items=[{
+                            "rank": i + 1, "player_id": f"{i:032x}", "display_name": "Disk Runner",
+                            "points": 197, "mission_count": 2, "tied_wr_count": 0, "untied_wr_count": 1}
+                            for i in range(page * 8, page * 8 + 8)])
+                        capacity["pages"].append(entry)
+                    cache.write_text(json.dumps(capacity))
                     run("evict")
                     bounded = json.loads(cache.read_bytes())
                     pages = {page["location"]["page"] for page in bounded["pages"]}
-                    self.assertEqual(len(pages), 32)
+                    self.assertEqual(len(pages), 512)
                     self.assertIn(0, pages) # recently revisited page survives LRU eviction
                     self.assertTrue(all(page not in pages for page in range(1, 5)))
-                    self.assertLess(cache.stat().st_size, 1024 * 1024)
+                    self.assertLess(cache.stat().st_size, 4 * 1024 * 1024)
                 finally:
                     server.shutdown()
                     thread.join()

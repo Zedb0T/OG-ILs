@@ -94,7 +94,7 @@ class ClientIdentityTests(unittest.TestCase):
                     features = Path(profile) / "OpenGOAL/jak3/features"
                     features.mkdir(parents=True)
                     (features / "ghost-client.json").write_text(json.dumps({
-                        "player_id": player, "player_token": token,
+                        "player_id": player, "player_token": token, "prefetch_leaderboards": False,
                         "server": f"http://127.0.0.1:{server.server_port}",
                         "mode": 0, "submit_completed": False, "custom": {},
                     }), encoding="utf-8")

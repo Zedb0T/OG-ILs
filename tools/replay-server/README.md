@@ -79,14 +79,33 @@ Start retains normal unpause behavior. Lists and standings show eight rows per p
 
 The client fetches public metadata only, off the game thread: no registration,
 ping, upload or replay download is needed to open the page. Its cache holds at
-most 32 least-recently-used pages for the current server, keyed by board, group,
+most 512 least-recently-used pages for the current server, keyed by board, group,
 mission, and page, with a 60-second TTL, a five-second
 manual-refresh cooldown, and a 15-second retry backoff. Failed or malformed
-responses preserve last-good rows with an offline banner. Visited pages are also
+responses preserve last-good rows with an offline banner. Visited and prefetched pages are also
 atomically saved to `ghost-cache/servers/<encoded-server>/leaderboards-v1.json`
 under the game's user features directory. Each server has a separate, versioned
-snapshot, capped at 32 pages and 1 MiB. This is a visited-page cache, not a
-background download of every leaderboard.
+snapshot, capped at 512 pages and 4 MiB, enough for the current complete catalog
+and standings. Existing version-1 snapshots remain compatible.
+
+The boot player-status update automatically arms a low-priority background fill.
+After a three-second startup grace period, the worker fetches the four combined
+boards, the full mission catalog, and individual standings in batches of 96 rows
+(12 native pages). It leaves a one-second gap between batches and works only
+when the regular job queue is empty. Player pings, replay loading/uploads, and
+requested menu pages cancel an in-flight prefetch and run first. Prefetch uses
+only public metadata: no extra registration, ping, upload, or replay download.
+Catalog entries with zero racers seed empty mission boards without additional
+HTTP calls; they retain the catalog's timestamp.
+
+The fill skips cached batches fetched within 15 minutes and attempts each batch
+at most once per startup/server-switch pass. A complete recent cache causes no
+prefetch traffic on restart. Failures back off from 30 seconds to five minutes;
+partial batches never become visible. Warming stops at the capacity limit and
+never evicts cached pages; explicit browsing retains normal LRU behavior.
+Set `"prefetch_leaderboards": false` in `ghost-client.json` to disable automatic
+warming. A first-ever cold launch still needs time/network access to fill pages;
+later launches can display the persisted data immediately while it refreshes.
 
 On startup or a server switch, the worker restores the saved pages before any
 leaderboard HTTP request. Opening a saved board shows its old rows immediately
@@ -101,8 +120,9 @@ from the current player ID. Switching servers clears the live pages, restores
 that server's own snapshot, and rejects old in-flight responses. A late response after
 navigation only updates its own cache entry, never a different board. Responses are capped
 at 256 KiB and ten seconds; names are sanitized before native font rendering.
-`test_client_leaderboard.py` and `test_client_leaderboard_disk.py` run navigation,
-restart/offline recovery, cache bounds, and failure checks against temporary
+`test_client_leaderboard.py`, `test_client_leaderboard_disk.py`, and
+`test_client_leaderboard_warm.py` run navigation, restart/offline recovery,
+background filling, bulk pagination, preemption, cache bounds, and failure checks against temporary
 local fixtures and profiles.
 
 Speedrun.com refreshes hourly in one background worker, paced at 48 requests

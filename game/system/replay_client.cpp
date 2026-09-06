@@ -1,6 +1,7 @@
 #include "replay_client.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -10,8 +11,10 @@
 #include <iomanip>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <random>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <thread>
 
@@ -33,8 +36,10 @@ constexpr int kCustomLimit = 8;
 constexpr int kLastRaceMode = 5;
 constexpr size_t kSnapshotBudget = 64 * 1024 * 1024;
 constexpr int kLeaderboardPageSize = 8;
-constexpr size_t kLeaderboardCachePages = 32;
-constexpr size_t kLeaderboardCacheBytes = 1024 * 1024;
+constexpr size_t kLeaderboardCachePages = 512;
+constexpr size_t kLeaderboardCacheBytes = 4 * 1024 * 1024;
+constexpr int kLeaderboardWarmPages = 12; // 96 rows, within the public API's 100-row limit
+constexpr int kLeaderboardWarmAge = 15 * 60;
 constexpr const char* kLeaderboardGroups[] = {"all", "main", "orb", "side"};
 constexpr const char* kLeaderboardTitles[] = {
     "All Missions", "Main Missions", "Orb Searches", "Other Side Missions", "Individual Missions"};
@@ -176,7 +181,7 @@ size_t receive(char* bytes, size_t size, size_t count, void* user) {
 // bounded transfers run off the game thread and retain normal TLS verification.
 std::string request(const std::string& base, const std::string& path,
                     const std::string& body = "", const std::string& player = "",
-                    const std::string& token = "") {
+                    const std::string& token = "", const std::atomic<bool>* interrupt = nullptr) {
   auto* curl = curl_easy_init();
   if (!curl) throw std::runtime_error("HTTP initialization failed");
   ResponseBuffer response{{}, path.rfind("/api/v1/", 0) == 0 ? 256 * 1024 : replay::kMaxFileBytes};
@@ -194,6 +199,14 @@ std::string request(const std::string& base, const std::string& path,
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+  if (interrupt) {
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, interrupt);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION,
+        +[](void* state, curl_off_t, curl_off_t, curl_off_t, curl_off_t) -> int {
+          return static_cast<const std::atomic<bool>*>(state)->load() ? 1 : 0;
+        });
+  }
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, receive);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
   if (!body.empty()) {
@@ -346,7 +359,7 @@ class Client {
     worker = std::thread([this] { work(); });
   }
   ~Client() {
-    { std::lock_guard lock(mutex); stopping = true; jobs.clear(); }
+    { std::lock_guard lock(mutex); stopping = true; jobs.clear(); leaderboard_warm_interrupt = true; }
     wake.notify_one();
     if (worker.joinable()) worker.join();
   }
@@ -378,16 +391,39 @@ class Client {
   void enqueue(std::function<void()> job) {  // caller owns mutex
     if (jobs.size() >= 8) throw std::runtime_error("Ghost work queue full; retry later");
     jobs.push_back(std::move(job));
+    leaderboard_warm_interrupt = true; // foreground work preempts an idle download
     wake.notify_one();
   }
   void work() {
     for (;;) {
       std::function<void()> job;
-      { std::unique_lock lock(mutex); wake.wait(lock, [this] { return stopping || !jobs.empty(); });
-        if (stopping) return;
-        job = std::move(jobs.front()); jobs.pop_front(); }
+      bool warming = false;
+      {
+        std::unique_lock lock(mutex);
+        for (;;) {
+          if (stopping) return;
+          if (!jobs.empty()) { job = std::move(jobs.front()); jobs.pop_front(); break; }
+          if (leaderboard_warm_armed && !leaderboard_warm_done && leaderboard_cache_revision == server_revision) {
+            if (std::chrono::steady_clock::now() >= leaderboard_warm_after) {
+              leaderboard_warm_interrupt = false;
+              job = leaderboard_warm_job();
+              if (job) { warming = leaderboard_warm_active = true; break; }
+              leaderboard_warm_done = true;
+            } else {
+              wake.wait_until(lock, leaderboard_warm_after);
+              continue;
+            }
+          }
+          wake.wait(lock);
+        }
+      }
       try { job(); }
-      catch (const std::exception& error) { std::lock_guard lock(mutex); status = error.what(); }
+      catch (const std::exception& error) {
+        std::lock_guard lock(mutex);
+        if (warming) leaderboard_warm_after = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        else status = error.what();
+      }
+      if (warming) { std::lock_guard lock(mutex); leaderboard_warm_active = false; }
     }
   }
   void register_player(const std::string& server) {
@@ -628,9 +664,178 @@ class Client {
             {"page_size", kLeaderboardPageSize}, {"pages", std::move(entries)}};
   }
 
+  void leaderboard_save_snapshot(const std::string& server, const json& snapshot) {
+    try {
+      if (snapshot.dump(2).size() > kLeaderboardCacheBytes)
+        throw std::runtime_error("Leaderboard disk snapshot too large");
+      save_json(cache_directory(server) / "leaderboards-v1.json", snapshot);
+    } catch (const std::exception&) {
+      lg::warn("Cannot save leaderboard disk cache; live standings remain available");
+    }
+  }
+
+  void leaderboard_start_warming() { // caller owns mutex; boot HUD or explicit warm request
+    if (leaderboard_warm_armed || !config.value("prefetch_leaderboards", true)) return;
+    leaderboard_warm_armed = true;
+    leaderboard_warm_epoch = leaderboard_now() - kLeaderboardWarmAge;
+    leaderboard_warm_after = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    wake.notify_one();
+  }
+
+  // Selected only while the normal work queue is empty. Batch requests fill
+  // twelve native pages at a time; a pass is bounded by the cache capacity.
+  // Cached recent pages are skipped on restart. No GOAL pointers or credentials.
+  std::function<void()> leaderboard_warm_job() { // caller owns mutex, on worker
+    if (leaderboard_warm_seen.size() >= kLeaderboardCachePages || leaderboard_pages.size() >= kLeaderboardCachePages)
+      return {};
+    std::optional<LeaderboardLocation> candidate;
+    const auto consider = [&](LeaderboardLocation location) {
+      if (candidate || leaderboard_warm_seen.count(location.key())) return;
+      const auto first = leaderboard_pages.find(location.key());
+      bool fresh = first != leaderboard_pages.end() && first->second.valid;
+      const auto count = fresh ? std::min(kLeaderboardWarmPages,
+          std::max(1, (first->second.total + kLeaderboardPageSize - 1) / kLeaderboardPageSize - location.page)) : 1;
+      for (int i = 0; fresh && i < count; ++i) {
+        auto page = location;
+        page.page += i;
+        const auto found = leaderboard_pages.find(page.key());
+        fresh = found != leaderboard_pages.end() && found->second.valid && found->second.fetched_at >= leaderboard_warm_epoch;
+      }
+      if (fresh) leaderboard_warm_seen.insert(location.key());
+      else candidate = location;
+    };
+    const auto more_pages = [&](LeaderboardLocation location) {
+      const auto first = leaderboard_pages.find(location.key());
+      if (first == leaderboard_pages.end() || !first->second.valid) return;
+      const auto pages = std::min<int>(kLeaderboardCachePages,
+          (first->second.total + kLeaderboardPageSize - 1) / kLeaderboardPageSize);
+      for (int page = kLeaderboardWarmPages; !candidate && page < pages; page += kLeaderboardWarmPages) {
+        location.page = page;
+        consider(location);
+      }
+    };
+    for (int group = 0; group < 4; ++group) {
+      LeaderboardLocation location;
+      location.screen = 1; location.group = group;
+      consider(location);
+    }
+    LeaderboardLocation catalog_location;
+    catalog_location.screen = 2;
+    consider(catalog_location);
+    if (!candidate) more_pages(catalog_location);
+
+    // Catalog metadata is sufficient to represent an empty board. Preserve its
+    // timestamp: an old catalog must never manufacture a fresh empty result.
+    std::vector<LeaderboardPage> empty_pages;
+    std::vector<LeaderboardLocation> missions;
+    if (!candidate) {
+      const auto first = leaderboard_pages.find(catalog_location.key());
+        const int count = first == leaderboard_pages.end() ? 0 :
+            (first->second.total + kLeaderboardPageSize - 1) / kLeaderboardPageSize;
+      for (int page = 0; page < count; ++page) {
+        catalog_location.page = page;
+        const auto found = leaderboard_pages.find(catalog_location.key());
+        if (found == leaderboard_pages.end() || !found->second.valid) continue;
+        const auto& catalog_page = found->second;
+        for (const auto& row : catalog_page.rows) {
+          LeaderboardLocation location;
+          location.screen = 3; location.mission = row.mission; location.label = row.name;
+          if (row.count) { missions.push_back(location); continue; }
+          const auto existing = leaderboard_pages.find(location.key());
+          if (existing != leaderboard_pages.end() && existing->second.valid &&
+              existing->second.fetched_at >= catalog_page.fetched_at) continue;
+          auto empty = parse_leaderboard({{"api_version", 1}, {"game", "jak3"}, {"source", "ghosts"},
+              {"group", "all"}, {"offset", 0}, {"total", 0}, {"ranked_missions", catalog_page.ranked_missions},
+              {"mission", {{"mission_id", row.mission}, {"wr_seconds", nullptr}}}, {"items", json::array()}}, location, player);
+          empty.fetched_at = catalog_page.fetched_at;
+          empty.from_disk = catalog_page.from_disk;
+          empty.status = "CATALOG / No recorded runs";
+          empty.retry_after = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+          empty_pages.push_back(std::move(empty));
+        }
+      }
+      for (const auto& location : missions) consider(location);
+      for (int group = 0; !candidate && group < 4; ++group) {
+        LeaderboardLocation location;
+        location.screen = 1; location.group = group;
+        more_pages(location);
+      }
+      for (const auto& location : missions) if (!candidate) more_pages(location);
+    }
+    if (!candidate && empty_pages.empty()) return {};
+    const auto server = base;
+    const auto generation = server_revision;
+    return [this, server, generation, candidate, empty_pages = std::move(empty_pages)]() mutable {
+      bool failed = false;
+      std::vector<LeaderboardPage> pages;
+      try {
+        if (candidate) {
+          const auto& location = *candidate;
+          const auto path = location.screen == 1 ? "/api/v1/leaderboards/points" :
+              location.screen == 2 ? std::string("/api/v1/missions") :
+              "/api/v1/missions/" + location.mission + "/leaderboard";
+          const auto raw = request(server, path + "?source=ghosts&game=jak3&group=" + kLeaderboardGroups[location.group] +
+              "&limit=" + std::to_string(kLeaderboardWarmPages * kLeaderboardPageSize) +
+              "&offset=" + std::to_string(location.page * kLeaderboardPageSize), "", "", "", &leaderboard_warm_interrupt);
+          const auto data = json::parse(raw);
+          const auto total = leaderboard_int(data, "total", location.screen == 2 ? 512 : 1000000);
+          if (data.at("offset") != location.page * kLeaderboardPageSize || !data.at("items").is_array() ||
+              data.at("items").size() != static_cast<size_t>(std::clamp(total - location.page * kLeaderboardPageSize,
+                  0, kLeaderboardWarmPages * kLeaderboardPageSize)))
+            throw std::runtime_error("Invalid prefetch batch");
+          const auto& items = data.at("items");
+          for (int offset = 0; offset < std::max<int>(1, items.size()); offset += kLeaderboardPageSize) {
+            auto page_location = location;
+            page_location.page += offset / kLeaderboardPageSize;
+            auto chunk = data;
+            chunk["offset"] = page_location.page * kLeaderboardPageSize;
+            chunk["items"] = json::array();
+            for (int i = offset; i < std::min<int>(items.size(), offset + kLeaderboardPageSize); ++i)
+              chunk["items"].push_back(items.at(i));
+            auto page = parse_leaderboard(chunk, page_location, player);
+            page.fetched_at = leaderboard_now();
+            page.status = "LIVE STANDINGS  /  60s cache";
+            page.retry_after = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+            pages.push_back(std::move(page));
+          }
+        }
+      } catch (const std::exception&) { failed = true; }
+      json snapshot;
+      {
+        std::lock_guard lock(mutex);
+        if (generation != server_revision) return;
+        if (leaderboard_warm_interrupt.load()) {
+          leaderboard_warm_after = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+          return;
+        }
+        if (failed) {
+          const auto seconds = std::min(300, 30 << std::min(leaderboard_warm_failures++, 4));
+          leaderboard_warm_after = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+          return; // no partial batch or failed result replaces last-good data
+        }
+        if (candidate) leaderboard_warm_seen.insert(candidate->key());
+        leaderboard_warm_failures = 0;
+        // Put real standings first. Warming never evicts an already cached page.
+        for (auto& empty : empty_pages) pages.push_back(std::move(empty));
+        for (auto& page : pages) {
+          const auto key = page.location.key();
+          const auto existing = leaderboard_pages.find(key);
+          if (existing == leaderboard_pages.end() && leaderboard_pages.size() >= kLeaderboardCachePages) continue;
+          if (existing != leaderboard_pages.end() && existing->second.valid && existing->second.fetched_at > page.fetched_at) continue;
+          page.used = ++leaderboard_cache_clock;
+          if (leaderboard.board_key() == page.location.board_key()) leaderboard.total = page.total;
+          leaderboard_pages[key] = std::move(page);
+        }
+        snapshot = leaderboard_disk_snapshot(server);
+        leaderboard_warm_after = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+      }
+      leaderboard_save_snapshot(server, snapshot);
+    };
+  }
+
   // Inventory's read-only leaderboard uses the same bounded worker, never the
   // GOAL thread. Cache keys include board/group/mission/page; switching views
-  // during a request cannot publish that response into the new view. 32 LRU
+  // during a request cannot publish that response into the new view. 512 LRU
   // pages, 60s TTL, 15s failure backoff, 5s manual refresh cooldown.
   void leaderboard_refresh(bool force = false) { // caller owns mutex
     if (leaderboard_cache_revision != server_revision) { leaderboard_restore(); return; }
@@ -687,17 +892,7 @@ class Client {
         }
         if (save) snapshot = leaderboard_disk_snapshot(server);
       }
-      if (!snapshot.is_null()) {
-        try {
-          // Atomic replacement preserves the previous file if saving fails.
-          // A full/read-only disk must not turn a successful GET into an error.
-          if (snapshot.dump(2).size() > kLeaderboardCacheBytes)
-            throw std::runtime_error("Leaderboard disk snapshot too large");
-          save_json(cache_directory(server) / "leaderboards-v1.json", snapshot);
-        } catch (const std::exception&) {
-          lg::warn("Cannot save leaderboard disk cache; live standings remain available");
-        }
-      }
+      if (!snapshot.is_null()) leaderboard_save_snapshot(server, snapshot);
       std::lock_guard lock(mutex);
       if (generation == server_revision) leaderboard_pending = false;
     });
@@ -771,6 +966,12 @@ class Client {
   bool leaderboard_cache_loading = false;
   int leaderboard_cache_revision = -1;
   std::chrono::steady_clock::time_point leaderboard_manual_after{};
+  bool leaderboard_warm_armed = false, leaderboard_warm_done = false, leaderboard_warm_active = false;
+  int leaderboard_warm_failures = 0;
+  int64_t leaderboard_warm_epoch = 0;
+  std::atomic<bool> leaderboard_warm_interrupt{false};
+  std::set<std::string> leaderboard_warm_seen;
+  std::chrono::steady_clock::time_point leaderboard_warm_after{};
 };
 
 Client& client() { static Client instance; return instance; }
@@ -812,6 +1013,12 @@ bool set_server(Server server) {
     c.base = next_server;
     ++c.revision;
     ++c.server_revision;
+    c.leaderboard_warm_interrupt = true;
+    c.leaderboard_warm_done = false;
+    c.leaderboard_warm_seen.clear();
+    c.leaderboard_warm_failures = 0;
+    c.leaderboard_warm_epoch = leaderboard_now() - kLeaderboardWarmAge;
+    c.leaderboard_warm_after = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     c.leaderboard_pages.clear();
     c.leaderboard_pending = false;
     c.leaderboard_cache_loading = false;
@@ -881,7 +1088,9 @@ int command(int operation, int value, const std::string& category) {
       case 16: return c.ping() ? 1 : 0;
       // Called every HUD frame: contact the selected server once per session
       // or server change, not every mission retry. Manual ping can retry errors.
-      case 17: return !c.identity_requested && c.ping() ? 1 : 0;
+      case 17:
+        c.leaderboard_start_warming();
+        return !c.identity_requested && c.ping() ? 1 : 0;
       case 20:
         if (value >= 0 && c.leaderboard.screen != 0) {
           const auto page = std::clamp(value, 0, c.leaderboard_page_count() - 1);
@@ -926,6 +1135,8 @@ int command(int operation, int value, const std::string& category) {
         if (c.leaderboard.screen == 0) return 0;
         c.leaderboard.page = std::clamp(c.leaderboard.page + std::clamp(value, -1, 1), 0, c.leaderboard_page_count() - 1);
         c.leaderboard.cursor = 0; c.leaderboard_visit(); return c.leaderboard.page;
+      case 35: c.leaderboard_start_warming(); return 1;
+      case 36: return !c.leaderboard_warm_armed || c.leaderboard_warm_done ? 0 : c.leaderboard_warm_active ? 2 : 1;
       default: return 0;
     }
   } catch (const std::exception& e) { lg::warn("replay client: {}", e.what()); return 0; }

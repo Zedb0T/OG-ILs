@@ -243,8 +243,8 @@ TEST(ReplayClient, LeaderboardDiskCacheAcrossSessions) {
   }
   ASSERT_EQ(replay_client::command(26, 0, ""), 1);
   if (phase == "evict") {
-    for (int page = 1; page < 36; ++page) {
-      if (page == 32) { replay_client::command(20, 0, ""); wait(); } // keep first page hot
+    for (int page = 512; page < 516; ++page) {
+      if (page == 512) { replay_client::command(20, 0, ""); wait(); } // keep first page hot
       EXPECT_EQ(replay_client::command(20, page, ""), page);
       wait();
       EXPECT_EQ(replay_client::command(23, 0, ""), 8);
@@ -269,6 +269,65 @@ TEST(ReplayClient, LeaderboardDiskCacheAcrossSessions) {
   ASSERT_EQ(replay_client::command(29, 0, ""), 3);
   EXPECT_EQ(replay_client::text(12, 0), live ? "6.500s" : "7.500s");
   EXPECT_EQ(replay_client::text(21, 0), live ? "Live Runner" : "Disk Runner");
+}
+
+TEST(ReplayClient, LeaderboardWarmsWithoutOpeningMenu) {
+  const auto* profile = std::getenv("OG_LEADERBOARD_WARM_PROFILE");
+  const auto* mode = std::getenv("OG_LEADERBOARD_WARM_MODE");
+  if (!profile || !mode) GTEST_SKIP() << "Run the isolated prefetch harness";
+  file_util::override_user_config_dir(fs::path(profile), true);
+  const std::string phase(mode);
+  replay_client::command(35, 0, ""); // same arming path as boot, no identity request
+  if (phase == "failure" || phase == "badbatch") {
+    std::this_thread::sleep_for(std::chrono::milliseconds(5600));
+    EXPECT_EQ(replay_client::command(36, 0, ""), 1); // idle, in failure backoff
+    replay_client::command(31, 0, "");
+    EXPECT_EQ(replay_client::command(26, 0, ""), 0); // no partially validated first page
+    return;
+  }
+  if (phase == "interrupt") {
+    const auto start = std::chrono::steady_clock::now();
+    while (replay_client::command(36, 0, "") != 2 && std::chrono::steady_clock::now() - start < std::chrono::seconds(6))
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    ASSERT_EQ(replay_client::command(36, 0, ""), 2);
+    std::this_thread::sleep_for(std::chrono::milliseconds(150)); // transfer is in flight
+    replay_client::command(28, 0, "");
+    for (int i = 0; i < 4; ++i) replay_client::command(30, 1, "");
+    replay_client::command(31, 0, "");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!replay_client::command(26, 0, "") && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    ASSERT_EQ(replay_client::text(21, 0), "Warm Mission 0"); // does not wait for 5s idle download
+    return;
+  }
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+  while (replay_client::command(36, 0, "") && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ASSERT_EQ(replay_client::command(36, 0, ""), 0);
+  EXPECT_EQ(replay_client::command(29, 0, ""), 0); // never opened any leaderboard
+  EXPECT_EQ(replay_client::command(27, 0, ""), 0); // background work is not a menu spinner
+  if (phase == "resume") return; // all recent disk pages skipped without network requests
+  replay_client::command(31, 0, "");
+  EXPECT_EQ(replay_client::text(21, 0), "Warm Racer 1");
+  EXPECT_EQ(replay_client::command(27, 0, ""), 0);
+  replay_client::command(32, 0, "");
+  for (int i = 0; i < 4; ++i) replay_client::command(30, 1, "");
+  replay_client::command(31, 0, "");
+  EXPECT_EQ(replay_client::command(20, 13, ""), 13);
+  EXPECT_EQ(replay_client::command(23, 0, ""), 6);
+  for (int i = 0; i < 5; ++i) replay_client::command(30, 1, "");
+  replay_client::command(31, 0, "");
+  EXPECT_EQ(replay_client::text(15, 0), "Warm Mission 109");
+  EXPECT_EQ(replay_client::command(26, 0, ""), 1); // catalog-seeded empty mission
+  EXPECT_EQ(replay_client::command(23, 0, ""), 0);
+  EXPECT_EQ(replay_client::command(27, 0, ""), 0);
+  replay_client::command(32, 0, "");
+  replay_client::command(20, 0, "");
+  replay_client::command(31, 0, "");
+  EXPECT_EQ(replay_client::text(12, 0), "7.500s");
+  EXPECT_EQ(replay_client::command(20, 1, ""), 1);
+  EXPECT_EQ(replay_client::text(21, 1), "Warm Racer 10");
+  EXPECT_EQ(replay_client::command(27, 0, ""), 0);
 }
 
 TEST(ReplayClient, ServerSelectionPersistsWithoutChangingIdentityOrRaceMode) {

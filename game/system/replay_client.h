@@ -32,6 +32,7 @@ bool set_server(Server server);
 // 23 row count, 24 own-row flag, 25 rank, 26 valid page, 27 pending. Text operations
 // Commands 28 home, 29 view (0 home/1 points/2 catalog/3 mission), 30 move cursor,
 // 31 enter, 32 back (0 = let native menu exit), 33 cursor, 34 previous/next page.
+// 35 arm background warming (also armed by boot command 17), 36 warming incomplete.
 // Text 10-17: server/status/summary/count/page/title/subtitle/selected preview;
 // 20-24: rank/name/time/gap/points (points boards: rank/name/points/missions/WRs);
 // 30-31 home choice/title description; 32-33 catalog group/racer count.
