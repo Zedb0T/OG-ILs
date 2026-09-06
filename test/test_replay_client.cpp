@@ -93,7 +93,19 @@ TEST(ReplayClient, InventoryLeaderboardIsPagedCachedAndReadOnly) {
   };
   const auto config_path = file_util::get_user_features_dir(GameVersion::Jak3) / "ghost-client.json";
   const auto original = file_util::read_text_file(config_path);
+  replay_client::command(28, 0, "");
+  EXPECT_EQ(replay_client::command(29, 0, ""), 0);
+  EXPECT_EQ(replay_client::command(32, 0, ""), 0); // home lets Triangle exit natively
   EXPECT_EQ(replay_client::command(20, -10, ""), 0);
+  EXPECT_EQ(replay_client::command(27, 0, ""), 0); // home makes no request
+  for (int i = 0; i < 4; ++i) replay_client::command(30, 1, "");
+  ASSERT_EQ(replay_client::command(31, 0, ""), 1);
+  EXPECT_EQ(replay_client::command(29, 0, ""), 2);
+  wait();
+  EXPECT_EQ(replay_client::text(21, 0), "Orb Search 18 (Spargus E)");
+  EXPECT_EQ(replay_client::text(32, 0), "ORB");
+  ASSERT_EQ(replay_client::command(31, 0, ""), 1);
+  EXPECT_EQ(replay_client::command(29, 0, ""), 3);
   wait();
   ASSERT_EQ(replay_client::command(26, 0, ""), 1);
   EXPECT_EQ(replay_client::command(23, 0, ""), 8);
@@ -126,6 +138,68 @@ TEST(ReplayClient, InventoryLeaderboardIsPagedCachedAndReadOnly) {
     for (int i = 0; i < 100; ++i) replay_client::command(20, 0, "");
     EXPECT_EQ(replay_client::command(27, 0, ""), 0); // failure backoff
   }
+  EXPECT_EQ(replay_client::command(31, 0, ""), 0); // standings have no child
+  replay_client::command(32, 0, "");
+  EXPECT_EQ(replay_client::command(29, 0, ""), 2);
+  EXPECT_EQ(replay_client::command(27, 0, ""), 0); // catalog remains cached
+  EXPECT_EQ(replay_client::command(20, 999, ""), 1);
+  wait();
+  EXPECT_EQ(replay_client::text(21, 0), "Mission 8");
+  replay_client::command(31, 0, "");
+  wait();
+  EXPECT_EQ(replay_client::text(15, 0), "Mission 8");
+  EXPECT_EQ(replay_client::text(12, 0), "12.000s");
+  replay_client::command(32, 0, "");
+  EXPECT_EQ(replay_client::text(14, 0), "PAGE 2 / 2");
+  EXPECT_EQ(replay_client::command(33, 0, ""), 0);
+  replay_client::command(30, -1, ""); // wraps to previous page, final row
+  EXPECT_EQ(replay_client::text(14, 0), "PAGE 1 / 2");
+  EXPECT_EQ(replay_client::command(33, 0, ""), 7);
+  replay_client::command(30, 1, "");
+  EXPECT_EQ(replay_client::text(14, 0), "PAGE 2 / 2");
+  replay_client::command(20, 0, "");
+  replay_client::command(30, 1, "");
+  replay_client::command(31, 0, ""); // empty mission is valid, not a connection error
+  wait();
+  EXPECT_EQ(replay_client::command(26, 0, ""), 1);
+  EXPECT_EQ(replay_client::command(23, 0, ""), 0);
+  EXPECT_EQ(replay_client::text(15, 0), "Mission 1");
+  EXPECT_EQ(replay_client::text(12, 0), "--");
+  replay_client::command(32, 0, "");
+  EXPECT_EQ(replay_client::command(33, 0, ""), 1);
+  replay_client::command(32, 0, "");
+  EXPECT_EQ(replay_client::command(33, 0, ""), 4);
+  replay_client::command(30, -1, "");
+  replay_client::command(31, 0, ""); // side aggregate
+  wait();
+  EXPECT_EQ(replay_client::command(26, 0, ""), 1);
+  EXPECT_EQ(replay_client::command(23, 0, ""), 0);
+  EXPECT_EQ(replay_client::text(15, 0), "Other Side Missions");
+  replay_client::command(32, 0, "");
+  replay_client::command(30, -1, "");
+  replay_client::command(31, 0, ""); // orb aggregate
+  wait();
+  EXPECT_EQ(replay_client::text(21, 0), "Orb Champion");
+  EXPECT_EQ(replay_client::text(22, 0), "197");
+  EXPECT_EQ(replay_client::text(23, 0), "2");
+  EXPECT_EQ(replay_client::text(24, 0), "1");
+  EXPECT_EQ(replay_client::command(24, 0, ""), 1);
+  replay_client::command(32, 0, "");
+  replay_client::command(30, -1, "");
+  replay_client::command(31, 0, ""); // main request starts
+  replay_client::command(32, 0, ""); // leave before it finishes
+  replay_client::command(30, -1, "");
+  replay_client::command(31, 0, ""); // all aggregate has a different cache key
+  wait();
+  EXPECT_EQ(replay_client::command(23, 0, ""), 0); // late main response cannot bleed in
+  replay_client::command(20, -1, "");
+  wait();
+  EXPECT_EQ(replay_client::text(21, 0), "All Champion");
+  replay_client::command(32, 0, "");
+  replay_client::command(30, 1, "");
+  replay_client::command(31, 0, "");
+  EXPECT_EQ(replay_client::command(27, 0, ""), 0); // background main result is reusable
+  EXPECT_EQ(replay_client::text(21, 0), "Main Champion");
   EXPECT_EQ(file_util::read_text_file(config_path), original); // no ping/upload/settings write
   ASSERT_TRUE(replay_client::set_server(replay_client::Server::SparkedHost));
   EXPECT_EQ(replay_client::command(23, 0, ""), 0);

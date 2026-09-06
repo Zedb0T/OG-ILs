@@ -62,21 +62,29 @@ Use `source=speedrun|ghosts`, `game=jak3`, `group=all|main|orb|side`,
 UTC update time, and pagination. See `/api` for schemas and examples.
 The native pause-menu experiment below also uses this public API.
 
-### Native pause-menu experiment
+### Native pause-menu leaderboard browser
 
 On PC, **Pause → Leaderboards** replaces the Inventory page (inventory/save
-data is unchanged). This first in-game browser is fixed to **Orb Search 18
-(Spargus E)** and the **uploaded ghosts** source. It uses the selected Ghost
-Server endpoint, not a separate hardcoded host. Eight racers per page show
-rank, best time, gap to WR and points; your saved player ID highlights your row.
-Left/right or L1/R1 page, Square refreshes, and Triangle returns normally.
+data is unchanged). **All Missions**, **Main Missions**, **Orb Searches**, and
+**Other Side Missions** each open their combined points standings, showing
+total points, missions completed, and WR counts (including tied records).
+**Individual Missions** opens the full API catalog, including missions without
+runs. Select a mission for its best times, gaps to WR, and points.
+
+The browser uses the **uploaded ghosts** source on your selected Ghost Server,
+not a separate hardcoded host. Your saved player ID highlights your row.
+Up/down chooses an entry; X opens it; left/right or L1/R1 pages; Square refreshes.
+Triangle returns to the previous page and cursor, then to the native pause menu;
+Start retains normal unpause behavior. Lists and standings show eight rows per page.
 
 The client fetches public metadata only, off the game thread: no registration,
 ping, upload or replay download is needed to open the page. Its cache holds at
-most eight pages for the current server, with a 60-second TTL, a five-second
+most 32 least-recently-used pages for the current server, keyed by board, group,
+mission, and page, with a 60-second TTL, a five-second
 manual-refresh cooldown, and a 15-second retry backoff. Failed or malformed
 responses preserve last-good rows with an offline banner. Switching servers
-clears those pages and rejects old in-flight responses. Responses are capped
+clears those pages and rejects old in-flight responses. A late response after
+navigation only updates its own cache entry, never a different board. Responses are capped
 at 256 KiB and ten seconds; names are sanitized before native font rendering.
 `test_client_leaderboard.py` runs the paging/cache/failure integration checks
 against a temporary local fixture and profile.

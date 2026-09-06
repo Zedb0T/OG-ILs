@@ -863,32 +863,71 @@
       (draw-sprite2d-xy buf x y w h tint #x3fffff)))
   (none))
 
-;; Inventory is a read-only, native API leaderboard experiment. Reuse its menu
+;; Inventory is a read-only, native API leaderboard browser. Reuse its menu
 ;; type and state so pause/back navigation and save-game inventory stay intact.
 (defmethod draw-option ((this menu-inventory) (p progress) (fnt font-context) (index int) (selected symbol))
   (let ((alpha (fmax 0.0 (* 2.0 (- 0.5 (-> p menu-transition)))))
-        (page (pc-replay-client-command 20 (the int (-> this current-index)) "")))
-    (set! (-> this current-index) (the float page))
+        (view (pc-replay-client-command 29 0 ""))
+        (cursor (pc-replay-client-command 33 0 "")))
+    (pc-replay-client-command 20 -1 "")
     (progress-method-33 p *orb-leaderboard-bounds*)
     (set-alpha! fnt alpha)
     ;; Quiet navy surface, warm record accent, cool personal-rank highlight.
     (orb-leaderboard-rect 40 38 432 353 (new 'static 'rgba :r 9 :g 17 :b 27 :a 124) alpha)
     (orb-leaderboard-rect 40 38 432 2 (new 'static 'rgba :r 222 :g 179 :b 90 :a 128) alpha)
-    (orb-leaderboard-rect 54 118 404 42 (new 'static 'rgba :r 19 :g 33 :b 46 :a 128) alpha)
     (orb-leaderboard-text fnt "LEADERBOARDS" 56.0 51.0 0.32 (font-color cyan) 200)
-    (orb-leaderboard-text fnt "ORB SEARCH 18" 54.0 70.0 0.76 (font-color white) 395)
-    (orb-leaderboard-text fnt "SPARGUS E   /   JAK 3" 56.0 98.0 0.32 (font-color white) 208)
-    (orb-leaderboard-text fnt "WORLD RECORD" 65.0 125.0 0.27 (font-color yellow) 145)
+    (orb-leaderboard-field fnt 15 0 54.0 73.0 (if (= view 3) 0.43 0.60) (font-color white) 402)
+    (orb-leaderboard-field fnt 16 0 56.0 101.0 0.27 (font-color cyan) 400)
+    (cond
+      ((zero? view)
+       (dotimes (choice 5)
+         (let ((y (+ 120 (* choice 43))) (active? (= choice cursor)))
+           (orb-leaderboard-rect 54 y 404 38
+             (if active? (new 'static 'rgba :r 22 :g 68 :b 79 :a 128)
+                 (new 'static 'rgba :r 17 :g 29 :b 42 :a 120)) alpha)
+           (orb-leaderboard-rect 54 y (if active? 3 1) 38
+             (if active? (new 'static 'rgba :r 222 :g 179 :b 90 :a 128)
+                 (new 'static 'rgba :r 44 :g 66 :b 80 :a 128)) alpha)
+           (orb-leaderboard-field fnt 30 choice 66.0 (the float (+ y 5)) 0.45
+             (if active? (font-color yellow) (font-color white)) 364)
+           (orb-leaderboard-field fnt 31 choice 67.0 (the float (+ y 24)) 0.27
+             (if active? (font-color cyan) (font-color white)) 370)
+           (when active? (orb-leaderboard-text fnt "OPEN" 417.0 (the float (+ y 12)) 0.24 (font-color cyan) 35))))
+       (orb-leaderboard-text fnt "4 POINTS BOARDS  /  EVERY INDIVIDUAL MISSION" 56.0 341.0 0.28 (font-color cyan) 400))
+      ((= view 2)
+       (orb-leaderboard-rect 54 118 404 42 (new 'static 'rgba :r 19 :g 33 :b 46 :a 128) alpha)
+       (orb-leaderboard-text fnt "MISSIONS" 65.0 125.0 0.27 (font-color yellow) 87)
+       (orb-leaderboard-field fnt 12 0 65.0 139.0 0.49 (font-color white) 87)
+       (orb-leaderboard-text fnt "SELECTED COURSE" 164.0 125.0 0.27 (font-color cyan) 280)
+       (orb-leaderboard-field fnt 17 0 164.0 143.0 0.32 (font-color white) 284)
+       (orb-leaderboard-text fnt "TYPE" 62.0 172.0 0.26 (font-color cyan) 36)
+       (orb-leaderboard-text fnt "MISSION" 100.0 172.0 0.27 (font-color cyan) 300)
+       (orb-leaderboard-text fnt "RACERS" 418.0 172.0 0.23 (font-color cyan) 38)
+       (dotimes (row (pc-replay-client-command 23 0 ""))
+         (let ((y (+ 188 (* row 18))) (active? (= row cursor)))
+           (orb-leaderboard-rect 54 y 404 17
+             (if active? (new 'static 'rgba :r 22 :g 68 :b 79 :a 128)
+                 (if (zero? (logand row 1)) (new 'static 'rgba :r 17 :g 28 :b 39 :a 120)
+                     (new 'static 'rgba :r 12 :g 22 :b 33 :a 120))) alpha)
+           (when active?
+             (orb-leaderboard-rect 54 y 2 17 (new 'static 'rgba :r 222 :g 179 :b 90 :a 128) alpha))
+           (orb-leaderboard-field fnt 32 row 62.0 (the float (+ y 5)) 0.23 (font-color cyan) 36)
+           (orb-leaderboard-field fnt 21 row 100.0 (the float (+ y 3)) 0.32
+             (if active? (font-color yellow) (font-color white)) 310)
+           (orb-leaderboard-field fnt 33 row 428.0 (the float (+ y 4)) 0.29 (font-color white) 28))))
+      (else
+    (orb-leaderboard-rect 54 118 404 42 (new 'static 'rgba :r 19 :g 33 :b 46 :a 128) alpha)
+    (orb-leaderboard-text fnt (if (= view 1) "RANKED MISSIONS" "WORLD RECORD") 65.0 125.0 0.27 (font-color yellow) 145)
     (orb-leaderboard-field fnt 12 0 65.0 139.0 0.49 (font-color white) 150)
     (orb-leaderboard-text fnt "RACERS" 239.0 125.0 0.27 (font-color cyan) 84)
     (orb-leaderboard-field fnt 13 0 239.0 139.0 0.49 (font-color white) 84)
     (orb-leaderboard-text fnt "RANKED BY" 346.0 125.0 0.27 (font-color cyan) 104)
-    (orb-leaderboard-text fnt "BEST TIME" 346.0 142.0 0.34 (font-color white) 104)
+    (orb-leaderboard-text fnt (if (= view 1) "TOTAL POINTS" "BEST TIME") 346.0 142.0 0.31 (font-color white) 104)
     (orb-leaderboard-text fnt "RANK" 62.0 172.0 0.27 (font-color cyan) 37)
     (orb-leaderboard-text fnt "PLAYER" 110.0 172.0 0.27 (font-color cyan) 170)
-    (orb-leaderboard-text fnt "TIME" 294.0 172.0 0.27 (font-color cyan) 62)
-    (orb-leaderboard-text fnt "TO WR" 365.0 172.0 0.27 (font-color cyan) 61)
-    (orb-leaderboard-text fnt "PTS" 432.0 172.0 0.27 (font-color cyan) 28)
+    (orb-leaderboard-text fnt (if (= view 1) "POINTS" "TIME") 294.0 172.0 0.27 (font-color cyan) 62)
+    (orb-leaderboard-text fnt (if (= view 1) "MISSIONS" "TO WR") 365.0 172.0 0.25 (font-color cyan) 61)
+    (orb-leaderboard-text fnt (if (= view 1) "WRs" "PTS") 432.0 172.0 0.27 (font-color cyan) 28)
     (dotimes (row (pc-replay-client-command 23 0 ""))
       (let ((y (+ 188 (* row 18)))
             (own? (!= 0 (pc-replay-client-command 24 row "")))
@@ -910,8 +949,8 @@
         (orb-leaderboard-field fnt 22 row 294.0 (the float (+ y 3)) 0.35 (font-color white) 68)
         (orb-leaderboard-field fnt 23 row 365.0 (the float (+ y 4)) 0.29
           (if (= rank 1) (font-color yellow) (font-color cyan)) 64)
-        (orb-leaderboard-field fnt 24 row 432.0 (the float (+ y 4)) 0.29 (font-color white) 28)))
-    (when (zero? (pc-replay-client-command 23 0 ""))
+        (orb-leaderboard-field fnt 24 row 432.0 (the float (+ y 4)) 0.29 (font-color white) 28)))))
+    (when (and (nonzero? view) (zero? (pc-replay-client-command 23 0 "")))
       (orb-leaderboard-text fnt
         (if (nonzero? (pc-replay-client-command 26 0 "")) "NO RUNS YET"
             (if (nonzero? (pc-replay-client-command 27 0 "")) "FETCHING STANDINGS" "COULD NOT CONNECT"))
@@ -921,12 +960,17 @@
             (if (nonzero? (pc-replay-client-command 27 0 "")) "Your game stays paused while we connect."
                 "Check your Ghost Server setting or retry."))
         101.0 253.0 0.30 (font-color cyan) 325))
-    (orb-leaderboard-field fnt 14 0 56.0 341.0 0.29 (font-color white) 100)
-    (orb-leaderboard-field fnt 11 0 166.0 341.0 0.27 (font-color cyan) 290)
+    (when (nonzero? view)
+      (orb-leaderboard-field fnt 14 0 56.0 341.0 0.29 (font-color white) 100)
+      (orb-leaderboard-field fnt 11 0 166.0 341.0 0.27 (font-color cyan) 290))
     (orb-leaderboard-field fnt 10 0 56.0 357.0 0.23 (font-color white) 253)
     (orb-leaderboard-text fnt "COMMUNITY / UNVERIFIED" 303.0 357.0 0.23 (font-color yellow) 150)
     (orb-leaderboard-rect 54 369 404 1 (new 'static 'rgba :r 44 :g 66 :b 80 :a 100) alpha)
-    (orb-leaderboard-text fnt "Left / Right: page    Square: refresh    Triangle: back" 58.0 376.0 0.27 (font-color white) 400)
+    (orb-leaderboard-text fnt
+      (if (zero? view) "Up / Down: choose    X: open    Triangle: back"
+          (if (= view 2) "Up/Down: choose   L1/R1: page   X: open   Triangle: back"
+              "Left / Right: page    Square: refresh    Triangle: back"))
+      58.0 376.0 0.26 (font-color white) 400)
     (progress-method-34 p))
   (none))
 

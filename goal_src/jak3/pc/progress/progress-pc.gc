@@ -11,23 +11,29 @@
 (define-extern pc-replay-client-command (function int int string int))
 
 (defmethod respond-progress ((this menu-inventory) (p progress) (selected symbol))
-  (let ((page (the int (-> this current-index)))
-        (pages (pc-replay-client-command 22 0 "")))
-    (cond
+  (cond
+      ((cpad-pressed? 0 triangle)
+       (when (nonzero? (pc-replay-client-command 32 0 ""))
+         (cpad-clear! 0 triangle) (sound-play "generic-beep")))
+      ((cpad-pressed? 0 confirm)
+       (when (nonzero? (pc-replay-client-command 31 0 "")) (sound-play "generic-beep")))
+      ((or (cpad-pressed? 0 up l-analog-up)
+           (and (cpad-hold? 0 up l-analog-up) (time-elapsed? (-> p last-move) (seconds 0.18))))
+       (pc-replay-client-command 30 -1 "") (set-time! (-> p last-move)) (sound-play "generic-beep"))
+      ((or (cpad-pressed? 0 down l-analog-down)
+           (and (cpad-hold? 0 down l-analog-down) (time-elapsed? (-> p last-move) (seconds 0.18))))
+       (pc-replay-client-command 30 1 "") (set-time! (-> p last-move)) (sound-play "generic-beep"))
       ((or (cpad-pressed? 0 left l1 l-analog-left)
            (and (cpad-hold? 0 left l-analog-left) (time-elapsed? (-> p last-move) (seconds 0.25))))
-       (set! page (max 0 (- page 1))) (set-time! (-> p last-move)))
+       (pc-replay-client-command 34 -1 "") (set-time! (-> p last-move)) (sound-play "generic-beep"))
       ((or (cpad-pressed? 0 right r1 l-analog-right)
            (and (cpad-hold? 0 right l-analog-right) (time-elapsed? (-> p last-move) (seconds 0.25))))
-       (set! page (min (- pages 1) (+ page 1))) (set-time! (-> p last-move)))
+       (pc-replay-client-command 34 1 "") (set-time! (-> p last-move)) (sound-play "generic-beep"))
       ((cpad-pressed? 0 square)
        (pc-replay-client-command 21 0 "") (sound-play "generic-beep")))
-    (when (!= page (the int (-> this current-index)))
-      (set! (-> this current-index) (the float page))
-      (pc-replay-client-command 20 page "")
-      (sound-play "generic-beep")))
   ;; Do not let the generic menu select an inventory item or move its cursor.
-  ;; Triangle and Start still follow the normal pause-menu exit paths.
+  ;; Triangle first unwinds browser history; at home it exits normally. Start
+  ;; retains the native unpause path. Never activate a save-game inventory item.
   (cpad-clear! 0 confirm up down l-analog-up l-analog-down)
   0)
 
@@ -778,7 +784,7 @@
     (('inventory)
      (set! (-> this current-options) *inventory*)
      (set! (-> (the-as menu-inventory (-> *inventory* options 0)) current-index) 0.0)
-     (pc-replay-client-command 20 0 "")
+     (pc-replay-client-command 28 0 "")
      )
     (('bigmap)
      (set! (-> this current-options) *bigmap-options*)
